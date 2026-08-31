@@ -464,52 +464,52 @@ async def start_background_auto_maturity():
 def get_dashboard_stats(db: Session = Depends(get_db)):
     """Fetch system-wide aggregated metrics, recent transactions, and health for the dashboard"""
     try:
-        from sqlalchemy import func
-        total_customers = db.query(func.count(models.Customer.customer_id)).scalar() or 0
-        total_bookings = db.query(func.count(models.Booking.booking_ref)).scalar() or 0
-        total_rules = db.query(func.count(models.CouponRule.rule_id)).filter(models.CouponRule.status == "Active").scalar() or 0
-        
-        # Aggregate balances
-        balance_agg = db.query(
-            func.sum(models.CouponBalance.available).label("available"),
-            func.sum(models.CouponBalance.pending).label("pending"),
-            func.sum(models.CouponBalance.total_earned).label("total_earned"),
-            func.sum(models.CouponBalance.redeemed).label("redeemed"),
-            func.sum(models.CouponBalance.expired).label("expired"),
-            func.sum(models.CouponBalance.cancelled).label("cancelled"),
-        ).first()
+        from sqlalchemy import text
+        row = db.execute(text("""
+            SELECT 
+                (SELECT COUNT(*) FROM customers) AS total_customers,
+                (SELECT COUNT(*) FROM bookings) AS total_bookings,
+                (SELECT COUNT(*) FROM coupon_rules WHERE status = 'Active') AS active_rules,
+                COALESCE(SUM(available), 0) AS available,
+                COALESCE(SUM(pending), 0) AS pending,
+                COALESCE(SUM(total_earned), 0) AS total_earned,
+                COALESCE(SUM(redeemed), 0) AS redeemed
+            FROM coupon_balance;
+        """)).fetchone()
 
-        available = float(balance_agg.available or 0.0) if balance_agg else 0.0
-        pending = float(balance_agg.pending or 0.0) if balance_agg else 0.0
-        total_earned = float(balance_agg.total_earned or 0.0) if balance_agg else 0.0
-        redeemed = float(balance_agg.redeemed or 0.0) if balance_agg else 0.0
-        expired = float(balance_agg.expired or 0.0) if balance_agg else 0.0
+        stats_map = dict(row._mapping) if row else {}
 
         # Recent transactions (indexed by primary key id)
-        recent = db.query(models.CouponLedger).order_by(desc(models.CouponLedger.id)).limit(8).all()
+        recent = db.execute(text("""
+            SELECT txn_id, customer_id, booking_ref, txn_type, amount, status, created_at
+            FROM coupon_ledger
+            ORDER BY id DESC
+            LIMIT 8;
+        """)).fetchall()
+
         recent_txns = [
             {
-                "txn_id": t.txn_id,
-                "customer_id": t.customer_id,
-                "booking_ref": t.booking_ref,
-                "type": t.txn_type,
-                "amount": float(t.amount or 0.0),
-                "status": t.status,
-                "date": t.created_at.isoformat() if t.created_at else datetime.utcnow().isoformat()
+                "txn_id": r[0],
+                "customer_id": r[1],
+                "booking_ref": r[2],
+                "type": r[3],
+                "amount": float(r[4] or 0.0),
+                "status": r[5],
+                "date": r[6].isoformat() if r[6] else datetime.utcnow().isoformat()
             }
-            for t in recent
+            for r in recent
         ]
 
         return {
             "status": "success",
-            "available": available,
-            "pending": pending,
-            "total_earned": total_earned,
-            "redeemed": redeemed,
-            "expired": expired,
-            "total_customers": total_customers,
-            "total_bookings": total_bookings,
-            "active_rules": total_rules,
+            "available": float(stats_map.get("available") or 0.0),
+            "pending": float(stats_map.get("pending") or 0.0),
+            "total_earned": float(stats_map.get("total_earned") or 0.0),
+            "redeemed": float(stats_map.get("redeemed") or 0.0),
+            "expired": 0.0,
+            "total_customers": int(stats_map.get("total_customers") or 0),
+            "total_bookings": int(stats_map.get("total_bookings") or 0),
+            "active_rules": int(stats_map.get("active_rules") or 0),
             "recent_transactions": recent_txns,
             "engine": "MySQL 8.0"
         }

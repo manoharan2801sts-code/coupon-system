@@ -441,22 +441,6 @@ def _run_sync_maturity_job():
         db.close()
 
 
-async def background_auto_maturity_worker():
-    """Non-blocking background worker running in a separate thread every 60 seconds"""
-    while True:
-        try:
-            await asyncio.to_thread(_run_sync_maturity_job)
-        except Exception as e:
-            print(f"[WORKER-ERROR] {e}")
-        await asyncio.sleep(60)
-
-
-@app.on_event("startup")
-async def start_background_auto_maturity():
-    """Start background auto-maturity worker on server startup"""
-    asyncio.create_task(background_auto_maturity_worker())
-
-
 # ============================================================================
 # DASHBOARD STATS ENDPOINT
 # ============================================================================

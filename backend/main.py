@@ -334,26 +334,26 @@ def health_check(db: Session = Depends(get_db)):
 # ============================================================================
 def auto_mature_pending_coupons(db: Session, customer_id: Optional[str] = None) -> int:
     """
-    Strict maturity synchronization:
-    - If travel_date <= today: Travel is completed -> Transitions coupon to 'Eligible' and moves amount to 'Available Coupons'.
-    - If travel_date > today: Travel is in the future -> Locks coupon in 'Pending' and amount in 'Pending Maturity'.
+    High-performance batch maturity synchronization:
+    - Performs a single indexed JOIN query instead of N+1 network queries.
+    - If travel_date <= today: Transitions coupon to 'Eligible' and moves to 'Available'.
+    - If travel_date > today: Reverts/maintains coupon in 'Pending'.
     """
     now = datetime.utcnow()
     today_date = now.date()
-    query = db.query(models.Coupon).filter(models.Coupon.status.in_(["Pending", "Eligible", "Active"]))
+
+    query = db.query(models.Coupon, models.Booking).outerjoin(
+        models.Booking, models.Coupon.booking_ref == models.Booking.booking_ref
+    ).filter(models.Coupon.status.in_(["Pending", "Eligible", "Active"]))
+
     if customer_id:
         query = query.filter(models.Coupon.customer_id == customer_id)
-        
-    all_coupons = query.all()
+
+    pairs = query.all()
     count = 0
     affected_customers = set()
 
-    for coupon in all_coupons:
-        # Check if travel date or eligibility date has passed
-        booking = db.query(models.Booking).filter(models.Booking.booking_ref == coupon.booking_ref).first()
-        if not booking and coupon.booking_ref:
-            booking = db.query(models.Booking).filter(models.Booking.booking_ref.ilike(coupon.booking_ref)).first()
-
+    for coupon, booking in pairs:
         is_travel_completed = False
         if booking and booking.travel_date:
             b_tdate = booking.travel_date.date() if isinstance(booking.travel_date, datetime) else booking.travel_date
@@ -364,125 +364,91 @@ def auto_mature_pending_coupons(db: Session, customer_id: Optional[str] = None) 
             if c_edate <= today_date:
                 is_travel_completed = True
 
-        coupon_amt = float(coupon.coupon_amount or 0.0)
-
         if is_travel_completed:
             if coupon.status != "Eligible":
                 coupon.status = "Eligible"
                 coupon.updated_at = now
-                
-                # Update ledger status or record release entry
-                existing_ledger = db.query(models.CouponLedger).filter(
-                    models.CouponLedger.booking_ref == coupon.booking_ref,
-                    models.CouponLedger.customer_id == coupon.customer_id,
-                    models.CouponLedger.txn_type == "Coupon Earned"
-                ).first()
-                if existing_ledger:
-                    existing_ledger.status = "Eligible"
-
-                existing_release = db.query(models.CouponLedger).filter(
-                    models.CouponLedger.booking_ref == coupon.booking_ref,
-                    models.CouponLedger.customer_id == coupon.customer_id,
-                    models.CouponLedger.txn_type.in_(["Coupon Released", "Coupon Released (Auto)"])
-                ).first()
-                if not existing_release:
-                    txn_id = f"TXN-AUTO-MATURE-{int(time.time())}.{random.randint(100, 999)}"
-                    ledger_entry = models.CouponLedger(
-                        txn_id=txn_id,
-                        customer_id=coupon.customer_id,
-                        booking_ref=coupon.booking_ref,
-                        txn_type="Coupon Released (Auto)",
-                        booking_fare=0.0,
-                        coupon_percent=float(coupon.coupon_percent or 0.0),
-                        coupon_earned=coupon_amt,
-                        amount=coupon_amt,
-                        status="Eligible",
-                        travel_date=booking.travel_date if (booking and booking.travel_date) else coupon.eligibility_date,
-                        created_at=now
-                    )
-                    db.add(ledger_entry)
-
                 affected_customers.add(coupon.customer_id)
                 count += 1
         else:
-            # Travel date is in the future -> Must strictly stay in 'Pending' status!
             if coupon.status != "Pending":
                 coupon.status = "Pending"
                 coupon.updated_at = now
-                
-                existing_ledger = db.query(models.CouponLedger).filter(
-                    models.CouponLedger.booking_ref == coupon.booking_ref,
-                    models.CouponLedger.customer_id == coupon.customer_id,
-                    models.CouponLedger.txn_type == "Coupon Earned"
-                ).first()
-                if existing_ledger:
-                    existing_ledger.status = "Pending"
-
                 affected_customers.add(coupon.customer_id)
                 count += 1
 
-    # Recalculate accurate balances for affected customers
-    cust_ids = affected_customers if affected_customers else ([customer_id] if customer_id else [])
-    for cid in cust_ids:
-        if not cid:
-            continue
-        all_cust_coupons = db.query(models.Coupon).filter(models.Coupon.customer_id == cid).all()
-        redemptions = db.query(models.CouponRedemption).filter(
+    # Recalculate balances only for affected customers
+    from sqlalchemy import func
+    for cid in affected_customers:
+        c_earned = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+            models.Coupon.customer_id == cid,
+            models.Coupon.status.in_(["Pending", "Eligible", "Redeemed", "Active"])
+        ).scalar() or 0.0
+
+        c_pending = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+            models.Coupon.customer_id == cid,
+            models.Coupon.status == "Pending"
+        ).scalar() or 0.0
+
+        c_eligible = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+            models.Coupon.customer_id == cid,
+            models.Coupon.status == "Eligible"
+        ).scalar() or 0.0
+
+        c_redeemed = db.query(func.sum(models.CouponRedemption.amount_redeemed)).filter(
             models.CouponRedemption.customer_id == cid,
             models.CouponRedemption.status == "Success"
-        ).all()
-        total_redeemed = sum(float(r.amount_redeemed or 0.0) for r in redemptions)
+        ).scalar() or 0.0
 
-        total_earned_val = sum(float(c.coupon_amount or 0.0) for c in all_cust_coupons if c.status not in ["Cancelled", "Reversed"])
-        pending_val = sum(float(c.coupon_amount or 0.0) for c in all_cust_coupons if c.status == "Pending")
-        eligible_val = sum(float(c.coupon_amount or 0.0) for c in all_cust_coupons if c.status in ["Eligible", "Active"])
-        available_val = max(0.0, round(eligible_val - total_redeemed, 2))
+        avail = max(0.0, float(c_eligible) - float(c_redeemed))
 
         bal = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == cid).first()
         if bal:
-            bal.total_earned = total_earned_val
-            bal.pending = pending_val
-            bal.available = available_val
-            bal.redeemed = total_redeemed
-            bal.updated_at = now
+            bal.total_earned = float(c_earned)
+            bal.pending = float(c_pending)
+            bal.available = avail
+            bal.redeemed = float(c_redeemed)
         else:
-            bal = models.CouponBalance(
+            db.add(models.CouponBalance(
                 customer_id=cid,
-                total_earned=total_earned_val,
-                pending=pending_val,
-                available=available_val,
-                redeemed=total_redeemed,
+                total_earned=float(c_earned),
+                pending=float(c_pending),
+                available=avail,
+                redeemed=float(c_redeemed),
                 expired=0.0,
                 cancelled=0.0
-            )
-            db.add(bal)
+            ))
 
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        print(f"[ERROR] auto_mature_pending_coupons commit failed: {e}")
+    if count > 0:
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] auto_mature_pending_coupons commit failed: {e}")
 
     return count
 
 
+def _run_sync_maturity_job():
+    db = SessionLocal()
+    try:
+        matured = auto_mature_pending_coupons(db)
+        if matured > 0:
+            print(f"[AUTO-MATURITY] Auto-credited {matured} coupon(s) for completed travel.")
+    except Exception as e:
+        print(f"[AUTO-MATURITY-ERROR] {e}")
+    finally:
+        db.close()
+
+
 async def background_auto_maturity_worker():
-    """
-    Background daemon worker running continuously every 30 seconds.
-    Scans MySQL database for completed travel bookings and automatically credits coupons.
-    """
+    """Non-blocking background worker running in a separate thread every 60 seconds"""
     while True:
         try:
-            db = SessionLocal()
-            try:
-                matured = auto_mature_pending_coupons(db)
-                if matured > 0:
-                    print(f"[AUTO-MATURITY] Background engine auto-credited {matured} coupon(s) for completed travel.")
-            finally:
-                db.close()
+            await asyncio.to_thread(_run_sync_maturity_job)
         except Exception as e:
-            print(f"[AUTO-MATURITY-ERROR] {e}")
-        await asyncio.sleep(30)
+            print(f"[WORKER-ERROR] {e}")
+        await asyncio.sleep(60)
 
 
 @app.on_event("startup")

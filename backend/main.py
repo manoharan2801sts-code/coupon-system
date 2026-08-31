@@ -9,6 +9,11 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+# Ensure backend directory is in python search path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -493,9 +498,6 @@ async def start_background_auto_maturity():
 def get_dashboard_stats(db: Session = Depends(get_db)):
     """Fetch system-wide aggregated metrics, recent transactions, and health for the dashboard"""
     try:
-        # Trigger auto-maturity for all eligible pending coupons across the system
-        auto_mature_pending_coupons(db)
-
         from sqlalchemy import func
         total_customers = db.query(func.count(models.Customer.customer_id)).scalar() or 0
         total_bookings = db.query(func.count(models.Booking.booking_ref)).scalar() or 0

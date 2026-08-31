@@ -485,8 +485,8 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         redeemed = float(balance_agg.redeemed or 0.0) if balance_agg else 0.0
         expired = float(balance_agg.expired or 0.0) if balance_agg else 0.0
 
-        # Recent transactions
-        recent = db.query(models.CouponLedger).order_by(desc(models.CouponLedger.created_at)).limit(8).all()
+        # Recent transactions (indexed by primary key id)
+        recent = db.query(models.CouponLedger).order_by(desc(models.CouponLedger.id)).limit(8).all()
         recent_txns = [
             {
                 "txn_id": t.txn_id,

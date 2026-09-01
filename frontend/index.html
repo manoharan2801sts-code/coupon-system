@@ -758,6 +758,11 @@
             display: none;
         }
 
+        /* Mobile Navigation Elements */
+        .mobile-menu-btn {
+            display: none;
+        }
+
         .mobile-close-btn {
             display: none;
         }
@@ -766,12 +771,61 @@
             display: none;
             position: fixed;
             inset: 0;
-            background: rgba(0,0,0,0.55);
+            background: rgba(0,0,0,0.65);
             z-index: 998;
             backdrop-filter: blur(3px);
             transition: opacity 0.3s ease;
         }
 
+        .sidebar-overlay.active {
+            display: block !important;
+        }
+
+        .mobile-bottom-nav {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 64px;
+            background: #0f172a;
+            border-top: 1px solid rgba(255,255,255,0.15);
+            z-index: 990;
+            justify-content: space-around;
+            align-items: center;
+            padding: 0 0.25rem;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        }
+
+        .mobile-nav-tab {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            gap: 3px;
+            flex: 1;
+            text-align: center;
+        }
+
+        .mobile-nav-tab.active, .mobile-nav-tab:active {
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.12);
+        }
+
+        .mobile-nav-tab span.icon {
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        /* Tablet & Mobile Layout (< 1024px) */
         @media (max-width: 1024px) {
             .app-wrapper {
                 grid-template-columns: 1fr;
@@ -785,12 +839,12 @@
                 height: 100vh;
                 z-index: 1000;
                 transform: translateX(-100%);
-                transition: transform 0.3s ease;
-                box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                box-shadow: 4px 0 24px rgba(0,0,0,0.5);
             }
 
             .sidebar.active {
-                transform: translateX(0);
+                transform: translateX(0) !important;
             }
 
             .mobile-menu-btn {
@@ -803,8 +857,20 @@
                 display: block !important;
             }
 
-            .sidebar-overlay.active {
-                display: block;
+            .mobile-bottom-nav {
+                display: flex !important;
+            }
+
+            .content {
+                padding-bottom: 85px !important;
+            }
+
+            .topbar {
+                padding: 0.75rem 1rem;
+                flex-direction: row !important;
+                justify-content: space-between;
+                align-items: center;
+                gap: 0.5rem;
             }
 
             .grid-3, .grid-4 {
@@ -812,9 +878,11 @@
             }
         }
 
+        /* Mobile Screens (< 768px) */
         @media (max-width: 768px) {
             .content {
                 padding: 1rem;
+                padding-bottom: 85px !important;
             }
 
             .card {
@@ -829,65 +897,8 @@
                 grid-template-columns: 1fr;
             }
 
-        /* Mobile Bottom Navigation Bar */
-        .mobile-bottom-nav {
-            display: none;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 62px;
-            background: #0f172a;
-            border-top: 1px solid rgba(255,255,255,0.15);
-            z-index: 990;
-            justify-content: space-around;
-            align-items: center;
-            padding: 0 0.5rem;
-            box-shadow: 0 -4px 16px rgba(0,0,0,0.3);
-        }
-
-        .mobile-nav-tab {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: #94a3b8;
-            font-size: 11px;
-            font-weight: 600;
-            cursor: pointer;
-            padding: 6px 12px;
-            border-radius: 6px;
-            transition: all 0.2s ease;
-            text-decoration: none;
-            gap: 2px;
-        }
-
-        .mobile-nav-tab.active, .mobile-nav-tab:active {
-            color: #38bdf8;
-        }
-
-        .mobile-nav-tab span.icon {
-            font-size: 18px;
-        }
-
-        @media (max-width: 1024px) {
-            .mobile-bottom-nav {
-                display: flex !important;
-            }
-            .content {
-                padding-bottom: 85px !important;
-            }
-            .topbar {
-                padding: 0.75rem 1rem;
-                flex-direction: row !important;
-                justify-content: space-between;
-                align-items: center;
-                gap: 0.5rem;
-            }
-        }
-
             .modal {
-                padding: 1.5rem;
+                padding: 1.25rem;
                 width: 95%;
             }
 
@@ -1882,6 +1893,30 @@
         </div>
     </div>
 </div>
+
+<!-- MOBILE BOTTOM QUICK NAVIGATION BAR -->
+<nav class="mobile-bottom-nav" id="mobile-bottom-nav">
+    <div class="mobile-nav-tab active" data-page="dashboard" onclick="app.navigateTo('dashboard')">
+        <span class="icon">📊</span>
+        <span>Dashboard</span>
+    </div>
+    <div class="mobile-nav-tab" data-page="client-portal" onclick="app.navigateTo('client-portal')">
+        <span class="icon">🏢</span>
+        <span>Portal</span>
+    </div>
+    <div class="mobile-nav-tab" data-page="coupons" onclick="app.navigateTo('coupons')">
+        <span class="icon">🎁</span>
+        <span>Coupons</span>
+    </div>
+    <div class="mobile-nav-tab" data-page="ledger" onclick="app.navigateTo('ledger')">
+        <span class="icon">📋</span>
+        <span>Ledger</span>
+    </div>
+    <div class="mobile-nav-tab" onclick="app.toggleMobileMenu(true)">
+        <span class="icon">☰</span>
+        <span>Menu</span>
+    </div>
+</nav>
 
 <!-- SCRIPTS -->
 <script>

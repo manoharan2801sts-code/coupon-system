@@ -174,6 +174,32 @@ def init_database():
             db.commit()
             print("[OK] Initial data seeded successfully!")
 
+        # Auto-clean duplicate ledger entries and sync balances on startup
+        try:
+            all_ledgers = db.query(models.CouponLedger).order_by(models.CouponLedger.id.asc()).all()
+            seen = set()
+            deleted_count = 0
+            for entry in all_ledgers:
+                if entry.txn_type == "Coupon Earned":
+                    key = (entry.customer_id, entry.booking_ref, entry.txn_type)
+                    if key in seen:
+                        db.delete(entry)
+                        deleted_count += 1
+                    else:
+                        seen.add(key)
+                else:
+                    unique_key = (entry.customer_id, entry.booking_ref, entry.txn_type, entry.amount)
+                    if unique_key in seen:
+                        db.delete(entry)
+                        deleted_count += 1
+                    else:
+                        seen.add(unique_key)
+            if deleted_count > 0:
+                db.commit()
+                print(f"[CLEANUP] Auto-cleaned {deleted_count} duplicate ledger records on startup.")
+        except Exception as ce:
+            print(f"[WARNING] Auto-cleanup warning: {ce}")
+
         db.close()
     except Exception as e:
         print(f"[WARNING] Database initialization error: {e}")
@@ -1092,38 +1118,8 @@ def get_all_coupon_ledger(db: Session = Depends(get_db)):
     ]
 
 
-@app.get("/api/coupon/ledger/{customer_id}", response_model=schemas.LedgerResponse, tags=["Coupons"])
-def get_coupon_ledger(customer_id: str, db: Session = Depends(get_db)):
-    """Fetch complete transaction history and audit trail for a customer"""
-    entries = db.query(models.CouponLedger).filter(
-        models.CouponLedger.customer_id == customer_id
-    ).order_by(desc(models.CouponLedger.created_at)).all()
-
-    ledger_items = []
-    for e in entries:
-        ledger_items.append(
-            schemas.LedgerItem(
-                txn_id=e.txn_id,
-                customer_id=e.customer_id,
-                booking_ref=e.booking_ref,
-                type=e.txn_type,
-                txn_type=e.txn_type,
-                booking_fare=float(e.booking_fare or 0.0),
-                coupon_percent=float(e.coupon_percent or 0.0),
-                coupon_earned=float(e.coupon_earned or 0.0),
-                amount=float(e.amount or 0.0),
-                status=e.status,
-                date=e.created_at.isoformat() if e.created_at else datetime.utcnow().isoformat(),
-                travel_date=e.travel_date.isoformat() if e.travel_date else None
-            )
-        )
-
-    return schemas.LedgerResponse(
-        customer_id=customer_id,
-        ledger=ledger_items
-    )
-
-
+@app.post("/api/admin/clean-duplicates", tags=["Coupons"])
+@app.get("/api/admin/clean-duplicates", tags=["Coupons"])
 @app.post("/api/coupon/ledger/cleanup-duplicates", tags=["Coupons"])
 @app.get("/api/coupon/ledger/cleanup-duplicates", tags=["Coupons"])
 def cleanup_duplicate_ledger_entries(db: Session = Depends(get_db)):
@@ -1204,6 +1200,38 @@ def cleanup_duplicate_ledger_entries(db: Session = Depends(get_db)):
         "recalculated_customers": len(all_customers),
         "message": f"Successfully removed {deleted_count} duplicate ledger records and synced all customer balances."
     }
+
+
+@app.get("/api/coupon/ledger/{customer_id}", response_model=schemas.LedgerResponse, tags=["Coupons"])
+def get_coupon_ledger(customer_id: str, db: Session = Depends(get_db)):
+    """Fetch complete transaction history and audit trail for a customer"""
+    entries = db.query(models.CouponLedger).filter(
+        models.CouponLedger.customer_id == customer_id
+    ).order_by(desc(models.CouponLedger.created_at)).all()
+
+    ledger_items = []
+    for e in entries:
+        ledger_items.append(
+            schemas.LedgerItem(
+                txn_id=e.txn_id,
+                customer_id=e.customer_id,
+                booking_ref=e.booking_ref,
+                type=e.txn_type,
+                txn_type=e.txn_type,
+                booking_fare=float(e.booking_fare or 0.0),
+                coupon_percent=float(e.coupon_percent or 0.0),
+                coupon_earned=float(e.coupon_earned or 0.0),
+                amount=float(e.amount or 0.0),
+                status=e.status,
+                date=e.created_at.isoformat() if e.created_at else datetime.utcnow().isoformat(),
+                travel_date=e.travel_date.isoformat() if e.travel_date else None
+            )
+        )
+
+    return schemas.LedgerResponse(
+        customer_id=customer_id,
+        ledger=ledger_items
+    )
 
 
 # ============================================================================

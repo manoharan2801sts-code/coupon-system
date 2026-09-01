@@ -716,6 +716,23 @@ def earn_coupon(payload: schemas.EarnCouponRequest, db: Session = Depends(get_db
     booking_fare = fare
     matched_percent = percent
 
+    # Check for duplicate coupon / booking reference (1 PNR = 1 Coupon rule)
+    existing_coupon = db.query(models.Coupon).filter(
+        (models.Coupon.booking_ref == payload.booking_ref) | (models.Coupon.coupon_id == f"CPN-{payload.booking_ref}")
+    ).first()
+    if existing_coupon:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Coupon already earned for booking reference '{payload.booking_ref}' (Status: '{existing_coupon.status}', Amount: ₹{existing_coupon.coupon_amount:.2f}). Duplicate coupon earning for the same PNR is not allowed."
+        )
+
+    existing_booking = db.query(models.Booking).filter(models.Booking.booking_ref == payload.booking_ref).first()
+    if existing_booking:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Booking reference '{payload.booking_ref}' already exists in system. Duplicate coupon earning for the same PNR is not allowed."
+        )
+
     customer = db.query(models.Customer).filter(models.Customer.customer_id == payload.customer_id).first()
     if not customer:
         customer = models.Customer(
@@ -739,47 +756,33 @@ def earn_coupon(payload: schemas.EarnCouponRequest, db: Session = Depends(get_db
 
     eligibility_dt = travel_dt + timedelta(days=1)
 
-    booking = db.query(models.Booking).filter(models.Booking.booking_ref == payload.booking_ref).first()
-    if not booking:
-        booking = models.Booking(
-            booking_ref=payload.booking_ref,
-            customer_id=payload.customer_id,
-            supplier=payload.supplier,
-            airline=payload.airline,
-            fare_type=payload.fare_type,
-            booking_type=payload.booking_type,
-            booking_fare=booking_fare,
-            booking_date=booking_dt,
-            travel_date=travel_dt,
-            status="Confirmed",
-            source_status="Confirmed"
-        )
-        db.add(booking)
-    else:
-        booking.booking_fare = booking_fare
-        booking.travel_date = travel_dt
-        booking.booking_type = payload.booking_type or booking.booking_type
-        booking.status = "Confirmed"
+    booking = models.Booking(
+        booking_ref=payload.booking_ref,
+        customer_id=payload.customer_id,
+        supplier=payload.supplier,
+        airline=payload.airline,
+        fare_type=payload.fare_type,
+        booking_type=payload.booking_type,
+        booking_fare=booking_fare,
+        booking_date=booking_dt,
+        travel_date=travel_dt,
+        status="Confirmed",
+        source_status="Confirmed"
+    )
+    db.add(booking)
 
     coupon_id = f"CPN-{payload.booking_ref}"
-    existing_coupon = db.query(models.Coupon).filter(models.Coupon.coupon_id == coupon_id).first()
-    if existing_coupon:
-        existing_coupon.coupon_amount = coupon_earned
-        existing_coupon.coupon_percent = matched_percent
-        existing_coupon.status = "Pending"
-        existing_coupon.eligibility_date = eligibility_dt
-    else:
-        new_coupon = models.Coupon(
-            coupon_id=coupon_id,
-            booking_ref=payload.booking_ref,
-            customer_id=payload.customer_id,
-            coupon_percent=matched_percent,
-            coupon_amount=coupon_earned,
-            status="Pending",
-            eligibility_date=eligibility_dt,
-            expiry_date=eligibility_dt + timedelta(days=365)
-        )
-        db.add(new_coupon)
+    new_coupon = models.Coupon(
+        coupon_id=coupon_id,
+        booking_ref=payload.booking_ref,
+        customer_id=payload.customer_id,
+        coupon_percent=matched_percent,
+        coupon_amount=coupon_earned,
+        status="Pending",
+        eligibility_date=eligibility_dt,
+        expiry_date=eligibility_dt + timedelta(days=365)
+    )
+    db.add(new_coupon)
 
     balance = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == payload.customer_id).first()
     if not balance:

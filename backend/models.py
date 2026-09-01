@@ -90,7 +90,7 @@ class Coupon(Base):
     __tablename__ = "coupons"
 
     coupon_id = Column(String(50), primary_key=True, index=True)
-    booking_ref = Column(String(50), nullable=False, index=True)
+    booking_ref = Column(String(50), unique=True, nullable=False, index=True)
     customer_id = Column(String(50), ForeignKey("customers.customer_id", ondelete="CASCADE"), nullable=False, index=True)
     coupon_percent = Column(Numeric(5, 2), nullable=False, default=0.00)
     coupon_amount = Column(Numeric(12, 2), nullable=False, default=0.00)

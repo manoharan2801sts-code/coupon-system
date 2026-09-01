@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS `bookings` (
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `coupons` (
     `coupon_id` VARCHAR(50) NOT NULL PRIMARY KEY,
-    `booking_ref` VARCHAR(50) NOT NULL,
+    `booking_ref` VARCHAR(50) NOT NULL UNIQUE,
     `customer_id` VARCHAR(50) NOT NULL,
     `coupon_percent` DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
     `coupon_amount` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,

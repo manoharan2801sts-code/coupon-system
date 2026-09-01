@@ -1124,6 +1124,88 @@ def get_coupon_ledger(customer_id: str, db: Session = Depends(get_db)):
     )
 
 
+@app.post("/api/coupon/ledger/cleanup-duplicates", tags=["Coupons"])
+@app.get("/api/coupon/ledger/cleanup-duplicates", tags=["Coupons"])
+def cleanup_duplicate_ledger_entries(db: Session = Depends(get_db)):
+    """
+    Cleans up duplicate 'Coupon Earned' transactions for the same booking reference,
+    keeping only the single authoritative entry per PNR, and recalculates customer balances.
+    """
+    all_ledgers = db.query(models.CouponLedger).order_by(models.CouponLedger.id.asc()).all()
+    
+    seen = set()
+    deleted_count = 0
+
+    for entry in all_ledgers:
+        if entry.txn_type == "Coupon Earned":
+            key = (entry.customer_id, entry.booking_ref, entry.txn_type)
+            if key in seen:
+                db.delete(entry)
+                deleted_count += 1
+            else:
+                seen.add(key)
+        else:
+            unique_key = (entry.customer_id, entry.booking_ref, entry.txn_type, entry.amount)
+            if unique_key in seen:
+                db.delete(entry)
+                deleted_count += 1
+            else:
+                seen.add(unique_key)
+                
+    db.commit()
+
+    # Recalculate balances for all customers
+    all_customers = db.query(models.Customer).all()
+    for cust in all_customers:
+        cid = cust.customer_id
+        earned_sum = db.query(func.coalesce(func.sum(models.CouponLedger.amount), 0.0)).filter(
+            models.CouponLedger.customer_id == cid,
+            models.CouponLedger.txn_type == "Coupon Earned"
+        ).scalar()
+        
+        pending_sum = db.query(func.coalesce(func.sum(models.Coupon.coupon_amount), 0.0)).filter(
+            models.Coupon.customer_id == cid,
+            models.Coupon.status == "Pending"
+        ).scalar()
+
+        eligible_sum = db.query(func.coalesce(func.sum(models.Coupon.coupon_amount), 0.0)).filter(
+            models.Coupon.customer_id == cid,
+            models.Coupon.status.in_(["Eligible", "Active"])
+        ).scalar()
+
+        redeemed_sum = db.query(func.coalesce(func.sum(models.CouponRedemption.amount_redeemed), 0.0)).filter(
+            models.CouponRedemption.customer_id == cid,
+            models.CouponRedemption.status == "Success"
+        ).scalar()
+
+        bal = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == cid).first()
+        if bal:
+            bal.total_earned = round(float(earned_sum or 0.0), 2)
+            bal.pending = round(float(pending_sum or 0.0), 2)
+            bal.available = round(max(0.0, float(eligible_sum or 0.0) - float(redeemed_sum or 0.0)), 2)
+            bal.redeemed = round(float(redeemed_sum or 0.0), 2)
+        else:
+            bal = models.CouponBalance(
+                customer_id=cid,
+                total_earned=round(float(earned_sum or 0.0), 2),
+                pending=round(float(pending_sum or 0.0), 2),
+                available=round(max(0.0, float(eligible_sum or 0.0) - float(redeemed_sum or 0.0)), 2),
+                redeemed=round(float(redeemed_sum or 0.0), 2),
+                expired=0.0,
+                cancelled=0.0
+            )
+            db.add(bal)
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "deleted_duplicates_count": deleted_count,
+        "recalculated_customers": len(all_customers),
+        "message": f"Successfully removed {deleted_count} duplicate ledger records and synced all customer balances."
+    }
+
+
 # ============================================================================
 # 8. CRUD ENDPOINTS FOR UI INTEGRATION (Customers, Bookings, Rules, etc.)
 # ============================================================================

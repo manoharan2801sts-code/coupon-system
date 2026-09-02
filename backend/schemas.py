@@ -123,6 +123,15 @@ class CustomerResponse(BaseModel):
     status: str
     created_at: Optional[str] = None
 
+class ClientLoginRequest(BaseModel):
+    customer_id: str
+    email: str
+
+class ClientLoginResponse(BaseModel):
+    status: str
+    message: str
+    customer: CustomerResponse
+
 # Booking Models
 class BookingCreate(BaseModel):
     ref: Optional[str] = None
@@ -210,3 +219,27 @@ class SettingsSchema(BaseModel):
     expiry_days: int = 365
     allow_partial_redemption: bool = True
     allow_combined_offers: bool = False
+
+
+# Authentication Schemas
+class AdminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+class AdminRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class AdminUserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    created_at: Optional[str] = None
+
+class LoginResponse(BaseModel):
+    status: str = "success"
+    message: str = "Login successful"
+    token: str
+    expires_in_seconds: int = 300  # 5 minutes
+    user: AdminUserResponse

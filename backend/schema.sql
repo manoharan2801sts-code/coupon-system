@@ -148,9 +148,26 @@ CREATE TABLE IF NOT EXISTS `system_settings` (
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ----------------------------------------------------------------------------
+-- 9. Table: admin_users (Authentication & RBAC)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `admin_users` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `name` VARCHAR(100) NOT NULL,
+    `email` VARCHAR(150) NOT NULL UNIQUE,
+    `password` VARCHAR(255) NOT NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_admin_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ============================================================================
 -- SEED INITIAL SAMPLE DATA
 -- ============================================================================
+
+-- Admin Users (Default password: Admin@123)
+INSERT INTO `admin_users` (`name`, `email`, `password`) VALUES
+('Super Admin', 'admin@coupon.com', '5ac8c79272255741ab15b43d510b0458ed2b164d104b28a3d88d48ddb0bec0c6')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- Customers
 INSERT INTO `customers` (`customer_id`, `name`, `email`, `phone`, `status`) VALUES

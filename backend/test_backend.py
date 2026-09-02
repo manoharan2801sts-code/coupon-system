@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import asyncio
 
 if sys.platform == "win32":
@@ -36,11 +37,13 @@ async def run_all_tests():
         assert "pending" in data
         print(f"[PASS] 2. Customer Balance: Available=₹{data['available']}, Pending=₹{data['pending']}, Earned=₹{data['total_earned']}")
 
+        test_bk_ref = f"BK-TEST-{int(time.time())}"
+
         # 3. Earn Coupon
         earn_payload = {
             "customer_id": "CUST001",
             "customer_name": "Rajesh Kumar",
-            "booking_ref": "BK-TEST-ASYNC-01",
+            "booking_ref": test_bk_ref,
             "supplier": "Supplier A",
             "airline": "IndiGo",
             "fare_type": "Super 6E",
@@ -58,7 +61,7 @@ async def run_all_tests():
         print(f"[PASS] 3. Earn Coupon: TxnID={data['txn_id']}, Earned=₹{data['coupon_earned']} ({data['coupon_percent']}%), Status={data['coupon_status']}")
 
         # 4. Release Coupon
-        r = await client.post("/api/coupon/release", json={"booking_ref": "BK-TEST-ASYNC-01"})
+        r = await client.post("/api/coupon/release", json={"booking_ref": test_bk_ref})
         assert r.status_code == 200, f"Release coupon failed: {r.text}"
         data = r.json()
         assert data["status"] == "success"
@@ -69,7 +72,7 @@ async def run_all_tests():
         # 5. Redeem Coupon
         redeem_payload = {
             "customer_id": "CUST001",
-            "booking_ref": f"BK-TEST-{int(asyncio.get_event_loop().time())}",
+            "booking_ref": f"BK-TEST-RDM-{int(time.time())}",
             "amount_to_redeem": 100.0,
             "booking_fare": 5000.0
         }
@@ -82,10 +85,11 @@ async def run_all_tests():
         print(f"[PASS] 5. Redeem Coupon: Redeemed=₹{data['coupon_redeemed']}, Customer Pays=₹{data['customer_payable']}, Remaining=₹{data['remaining_coupon_balance']}")
 
         # 6. Reverse Coupon
+        rev_bk_ref = f"BK-TEST-REV-{int(time.time())}"
         await client.post("/api/coupon/earn", json={
             "customer_id": "CUST001",
             "customer_name": "Rajesh Kumar",
-            "booking_ref": "BK-TEST-REVERSE-ASYNC",
+            "booking_ref": rev_bk_ref,
             "supplier": "Supplier A",
             "airline": "IndiGo",
             "fare_type": "Super 6E",
@@ -93,7 +97,7 @@ async def run_all_tests():
             "travel_date": "2026-12-15T14:30:00Z"
         })
         reverse_payload = {
-            "original_booking_ref": "BK-TEST-REVERSE-ASYNC",
+            "original_booking_ref": rev_bk_ref,
             "reason": "Cancelled",
             "remarks": "User requested flight cancellation"
         }
@@ -163,10 +167,12 @@ async def run_all_tests():
         assert r.status_code == 200, f"Upload failed: {r.text}"
         res_data = r.json()
         assert res_data["summary"]["success"] == 1
+        assert "total_coupon_earned" in res_data["summary"]
+        assert res_data["filename"] == "test_upload.xlsx"
         assert res_data["results"][0]["pax_name"] == "MR AUTO TESTER"
         assert res_data["results"][0]["sector"] == "MAA-DEL-MAA"
         assert res_data["results"][0]["booking_fare"] == 15000.0
-        print(f"[PASS] 10. Excel 13-Column Upload: {res_data['summary']['success']} row processed, Pax='{res_data['results'][0]['pax_name']}', Coupon=₹{res_data['results'][0]['coupon_earned']}")
+        print(f"[PASS] 10. Excel 13-Column Upload: {res_data['summary']['success']} row processed, Total Earned=₹{res_data['summary']['total_coupon_earned']}, Pax='{res_data['results'][0]['pax_name']}', Coupon=₹{res_data['results'][0]['coupon_earned']}")
 
         # 11. Test Rules with Office ID & Booking Type and Stats
         r = await client.get("/api/rules/stats")

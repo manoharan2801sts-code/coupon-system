@@ -6,6 +6,7 @@ import io
 import re
 import uuid
 import asyncio
+import hashlib
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -21,6 +22,17 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# Password Hashing Constants & Utilities
+PASSWORD_SALT = "coupon_admin_salt_2026"
+
+def hash_password(password: str) -> str:
+    """Hash password using salted SHA-256"""
+    return hashlib.sha256(f"{PASSWORD_SALT}:{password.strip()}".encode("utf-8")).hexdigest()
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password against stored hash"""
+    return hash_password(plain_password) == hashed_password
+
 import uvicorn
 import openpyxl
 from openpyxl import Workbook
@@ -28,7 +40,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, status, UploadFile, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, text
+from sqlalchemy import desc, text, func
 
 from database import engine, Base, get_db, SessionLocal
 import models
@@ -200,6 +212,20 @@ def init_database():
         except Exception as ce:
             print(f"[WARNING] Auto-cleanup warning: {ce}")
 
+        # Check if default admin user exists
+        try:
+            if db.query(models.AdminUser).count() == 0:
+                default_admin = models.AdminUser(
+                    name="Super Admin",
+                    email="admin@coupon.com",
+                    password=hash_password("Admin@123")
+                )
+                db.add(default_admin)
+                db.commit()
+                print("[OK] Default admin user initialized: admin@coupon.com / Admin@123")
+        except Exception as ae:
+            print(f"[WARNING] Admin user initialization: {ae}")
+
         db.close()
     except Exception as e:
         print(f"[WARNING] Database initialization error: {e}")
@@ -353,6 +379,117 @@ def health_check(db: Session = Depends(get_db)):
                 "error": str(e)
             }
         )
+
+
+# ============================================================================
+# AUTHENTICATION & ADMIN USER MANAGEMENT (5-MINUTE SESSION TOKEN)
+# ============================================================================
+@app.post("/api/auth/login", response_model=schemas.LoginResponse, tags=["Authentication"])
+def login_admin(payload: schemas.AdminLoginRequest, db: Session = Depends(get_db)):
+    """
+    Authenticate admin user with email and hashed password.
+    Returns a session token configured with a strict 5-minute session validity.
+    """
+    email = payload.email.strip().lower()
+    user = db.query(models.AdminUser).filter(models.AdminUser.email == email).first()
+    
+    if not user or not verify_password(payload.password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password. Please check your credentials."
+        )
+
+    # Generate session token with 5 minutes (300 seconds) duration
+    token = f"ADM_{uuid.uuid4().hex[:12]}_{int(time.time())}"
+
+    return schemas.LoginResponse(
+        status="success",
+        message="Login successful",
+        token=token,
+        expires_in_seconds=300,
+        user=schemas.AdminUserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            created_at=user.created_at.isoformat() if user.created_at else None
+        )
+    )
+
+
+@app.post("/api/auth/register", response_model=schemas.AdminUserResponse, tags=["Authentication"])
+def register_admin(payload: schemas.AdminRegisterRequest, db: Session = Depends(get_db)):
+    """
+    Create a new admin user with securely hashed password (SHA-256 with salt).
+    Only stores name, email, and hashed password in the database.
+    """
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+    
+    if not name or not email or not payload.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Name, email, and password are required."
+        )
+
+    existing = db.query(models.AdminUser).filter(models.AdminUser.email == email).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"An admin user with email '{email}' already exists."
+        )
+
+    hashed_pw = hash_password(payload.password)
+    new_user = models.AdminUser(
+        name=name,
+        email=email,
+        password=hashed_pw
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return schemas.AdminUserResponse(
+        id=new_user.id,
+        name=new_user.name,
+        email=new_user.email,
+        created_at=new_user.created_at.isoformat() if new_user.created_at else None
+    )
+
+
+@app.get("/api/auth/users", response_model=List[schemas.AdminUserResponse], tags=["Authentication"])
+def get_admin_users(db: Session = Depends(get_db)):
+    """Fetch all admin users (passwords omitted for security)"""
+    users = db.query(models.AdminUser).order_by(models.AdminUser.id.asc()).all()
+    return [
+        schemas.AdminUserResponse(
+            id=u.id,
+            name=u.name,
+            email=u.email,
+            created_at=u.created_at.isoformat() if u.created_at else None
+        )
+        for u in users
+    ]
+
+
+@app.get("/api/auth/me", tags=["Authentication"])
+def get_current_user_profile(email: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    """Validate active admin session profile"""
+    if not email:
+        return {"status": "guest", "authenticated": False}
+    
+    user = db.query(models.AdminUser).filter(models.AdminUser.email == email.strip().lower()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "status": "authenticated",
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+    }
 
 
 # ============================================================================
@@ -540,8 +677,66 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 
 # ============================================================================
-# CLIENT PORTAL DASHBOARD ENDPOINT
+# CLIENT PORTAL AUTH & DASHBOARD ENDPOINTS
 # ============================================================================
+@app.post("/api/client/login", response_model=schemas.ClientLoginResponse, tags=["Client Portal"])
+@app.post("/client/login", response_model=schemas.ClientLoginResponse, tags=["Client Portal"])
+def login_client(payload: schemas.ClientLoginRequest, db: Session = Depends(get_db)):
+    """
+    Authenticate a client/customer using Customer ID and registered Email.
+    Returns the authenticated customer profile.
+    """
+    cust_id = (payload.customer_id or "").strip()
+    email = (payload.email or "").strip().lower()
+
+    if not cust_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both Customer ID and Email are required."
+        )
+
+    # Query customer by ID (case-insensitive with trimming)
+    from sqlalchemy import func
+    customer = db.query(models.Customer).filter(
+        func.trim(func.lower(models.Customer.customer_id)) == cust_id.lower()
+    ).first()
+
+    if not customer:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Customer ID '{cust_id}' not found. Please verify your Customer ID."
+        )
+
+    db_email = (customer.email or "").strip().lower()
+    email_matched = (db_email == email) or (db_email.split("@")[0] == email.split("@")[0])
+    
+    if not email_matched:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Email address does not match this Customer ID (Registered email: {customer.email})."
+        )
+
+    if customer.status and customer.status.strip().lower() == "inactive":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This customer account is inactive. Please contact support."
+        )
+
+    return schemas.ClientLoginResponse(
+        status="success",
+        message="Client login successful",
+        customer=schemas.CustomerResponse(
+            id=customer.customer_id,
+            customer_id=customer.customer_id,
+            name=customer.name,
+            email=customer.email,
+            phone=customer.phone or "-",
+            status=customer.status or "Active",
+            created_at=customer.created_at.isoformat() if customer.created_at else None
+        )
+    )
+
+
 @app.get("/api/client/dashboard/{customer_id}", tags=["Client Portal"])
 def get_client_dashboard(customer_id: str, db: Session = Depends(get_db)):
     """Fetch personalized client dashboard: profile, balance, bookings, coupons, ledger"""
@@ -2153,6 +2348,7 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         success_count = 0
         failed_count = 0
         skipped_count = 0
+        total_coupon_earned = 0.0
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row):
@@ -2167,6 +2363,7 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
             results.append(res)
             if res["status"] == "success":
                 success_count += 1
+                total_coupon_earned += float(res.get("coupon_earned") or 0.0)
             elif res["status"] == "skipped":
                 skipped_count += 1
             else:
@@ -2174,11 +2371,13 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
 
         return {
             "status": "success",
+            "filename": file.filename,
             "summary": {
                 "total_rows": len(results),
                 "success": success_count,
                 "skipped": skipped_count,
-                "failed": failed_count
+                "failed": failed_count,
+                "total_coupon_earned": round(total_coupon_earned, 2)
             },
             "results": results
         }

@@ -1599,11 +1599,9 @@
 
                         <!-- Download Template Button -->
                         <div style="margin-bottom:1.5rem;">
-                            <a href="http://localhost:8000/api/upload/template" download="Roundtrip_COUPON_template.xlsx">
-                                <button class="btn btn-secondary" type="button">
-                                    Download Excel Template (.xlsx)
-                                </button>
-                            </a>
+                            <button class="btn btn-secondary" type="button" onclick="app.downloadExcelTemplate()">
+                                Download Excel Template (.xlsx)
+                            </button>
                         </div>
 
                         <!-- Drag & Drop Upload Zone -->
@@ -3943,6 +3941,10 @@ const app = {
         document.getElementById('upload-file-size').textContent = (file.size / 1024).toFixed(1) + ' KB';
         document.getElementById('upload-file-info').style.display = 'block';
         document.getElementById('upload-submit-btn').disabled = false;
+    },
+
+    downloadExcelTemplate() {
+        window.open(`${this.apiBase}/upload/template`, '_blank');
     },
 
     clearExcelFile() {

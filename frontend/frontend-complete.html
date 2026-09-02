@@ -1311,7 +1311,7 @@
                                     <option value="">Loading Clients...</option>
                                 </select>
                             </div>
-                            <button class="btn btn-secondary btn-sm" onclick="app.refreshClientPortal()" style="background: #10b981; border: none; white-space: nowrap;">Refresh</button>
+                            <button class="btn btn-secondary btn-sm" id="cp-refresh-btn" onclick="app.refreshClientPortal()" style="background: #10b981; border: none; white-space: nowrap;">Refresh</button>
                         </div>
                     </div>
                 </div>
@@ -1956,55 +1956,90 @@
 </div>
 
 <div class="modal-overlay" id="redeemCouponModal">
-    <div class="modal">
+    <div class="modal" style="max-width: 520px;">
         <div class="modal-header">
             <div class="modal-title">Redeem Coupon</div>
             <button class="modal-close" onclick="app.closeModal('redeemCouponModal')">×</button>
         </div>
         <div class="modal-body">
+            <!-- Customer ID with Auto-complete / Selector -->
             <div class="form-group">
-                <label>Customer ID</label>
-                <input type="text" id="redeem-customer-id" placeholder="CUST001">
+                <label>Customer ID / Client</label>
+                <div style="display:flex;gap:0.5rem;">
+                    <input type="text" id="redeem-customer-id" placeholder="e.g. CUST001 or RCPNQ0500104" list="redeem-customers-datalist" oninput="app.handleRedeemCustomerIdChange(this.value)" style="flex:1;">
+                    <button class="btn btn-ghost btn-sm" type="button" onclick="app.fetchRedeemCustomerData(document.getElementById('redeem-customer-id').value)" style="white-space:nowrap;border:1px solid var(--border);">Fetch Data</button>
+                </div>
+                <datalist id="redeem-customers-datalist"></datalist>
             </div>
+
+            <!-- Customer Live Info Banner (Name & Available Balance) -->
+            <div id="redeem-client-info-box" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:0.75rem 1rem;margin-bottom:1rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <strong id="redeem-client-name" style="color:var(--primary);font-size:14px;">—</strong>
+                        <div style="font-size:12px;color:var(--text-lighter);">ID: <span id="redeem-client-id-text">—</span></div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:11px;color:#166534;font-weight:600;">Available Coupon</div>
+                        <div style="font-size:16px;font-weight:700;color:#15803d;">₹<span id="redeem-client-available-amt">0.00</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Select from Customer's Bookings (Optional quick pick) -->
+            <div class="form-group" id="redeem-booking-select-group" style="display:none;">
+                <label>Select Unredeemed Booking (or enter manually below)</label>
+                <select id="redeem-booking-dropdown" onchange="app.handleRedeemBookingSelect(this.value)" style="width:100%;padding:0.5rem;border-radius:6px;border:1px solid var(--border);font-weight:500;">
+                    <option value="">-- Choose a booking to auto-fill --</option>
+                </select>
+            </div>
+
             <div class="form-group">
-                <label>Booking Reference</label>
-                <input type="text" id="redeem-booking-ref" placeholder="BK-2024-001">
+                <label>Booking Reference / S PNR</label>
+                <input type="text" id="redeem-booking-ref" placeholder="BK-2024-001" oninput="app.updateRedemptionCalc()">
             </div>
             <div class="form-group">
                 <label>Booking Fare (₹)</label>
-                <input type="number" id="redeem-booking-fare" placeholder="12000" min="0" step="0.01">
+                <input type="number" id="redeem-booking-fare" placeholder="12000" min="0" step="0.01" oninput="app.handleRedeemFareChange()">
             </div>
             <div class="form-group">
                 <label>Amount to Redeem (₹)</label>
                 <div class="slider-wrapper">
                     <div class="slider-labels">
                         <span>₹0</span>
-                        <span>Max: ₹<span id="redeem-max">5000</span></span>
+                        <span>Max: ₹<span id="redeem-max">0.00</span></span>
                     </div>
-                    <input type="range" id="redeem-amount-slider" min="0" max="5000" value="0" step="100" oninput="app.updateRedemptionCalc()">
-                    <div style="text-align: center; margin-top: 0.5rem; font-weight: 600;">
-                        ₹<span id="redeem-amount-display">0</span>
+                    <input type="range" id="redeem-amount-slider" min="0" max="0" value="0" step="50" oninput="app.updateRedemptionCalc()">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;">
+                        <div style="font-weight:700;font-size:18px;color:var(--secondary);">
+                            ₹<span id="redeem-amount-display">0.00</span>
+                        </div>
+                        <div style="display:flex;gap:0.35rem;">
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="app.setRedeemPercent(25)" style="padding:2px 6px;font-size:11px;border:1px solid var(--border);">25%</button>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="app.setRedeemPercent(50)" style="padding:2px 6px;font-size:11px;border:1px solid var(--border);">50%</button>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="app.setRedeemPercent(100)" style="padding:2px 6px;font-size:11px;border:1px solid var(--border);background:#ecfdf5;color:#047857;font-weight:600;">Max (100%)</button>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="summary-box">
                 <div class="summary-row">
                     <span class="summary-label">Booking Fare</span>
-                    <span class="summary-value">₹<span id="redeem-calc-fare">0</span></span>
+                    <span class="summary-value">₹<span id="redeem-calc-fare">0.00</span></span>
                 </div>
                 <div class="summary-row">
-                    <span class="summary-label">Coupon Used</span>
-                    <span class="summary-value" style="color: var(--danger);">-₹<span id="redeem-calc-coupon">0</span></span>
+                    <span class="summary-label">Coupon Used (Deduction)</span>
+                    <span class="summary-value" style="color: var(--danger); font-weight:700;">-₹<span id="redeem-calc-coupon">0.00</span></span>
                 </div>
-                <div class="summary-row">
-                    <span class="summary-label">Customer Pays</span>
-                    <span class="summary-value">₹<span id="redeem-calc-pay">0</span></span>
+                <div class="summary-row" style="border-top:1px dashed var(--border);padding-top:0.5rem;margin-top:0.5rem;">
+                    <span class="summary-label" style="font-weight:700;font-size:14px;">Customer Final Payable</span>
+                    <span class="summary-value" style="color: var(--primary); font-weight: 700; font-size: 15px;">₹<span id="redeem-calc-pay">0.00</span></span>
                 </div>
             </div>
         </div>
         <div class="modal-footer">
             <button class="btn btn-ghost" onclick="app.closeModal('redeemCouponModal')">Cancel</button>
-            <button class="btn btn-secondary" onclick="app.redeemCoupon()">Redeem Coupon</button>
+            <button class="btn btn-secondary" id="redeem-submit-btn" onclick="app.redeemCoupon()">Redeem Coupon</button>
         </div>
     </div>
 </div>
@@ -2670,14 +2705,12 @@ const app = {
 
     async loadClientPortal(customerId = null) {
         try {
-            // 1. Ensure client selector dropdown is populated with all customers
-            if (!this.state.customers || this.state.customers.length === 0) {
-                this.state.customers = await this.apiCall('/customers').catch(() => []);
-            }
+            // 1. Fetch fresh customer list from API so any new customers are listed
+            this.state.customers = await this.apiCall('/customers').catch(() => this.state.customers || []);
 
             const selector = document.getElementById('client-portal-selector');
             if (selector && this.state.customers && this.state.customers.length > 0) {
-                const currentVal = selector.value;
+                const currentVal = customerId || selector.value;
                 selector.innerHTML = this.state.customers.map(c => {
                     const cid = c.id || c.customer_id;
                     const name = c.name || cid;
@@ -2690,7 +2723,7 @@ const app = {
             }
 
             // Determine target customer ID
-            const targetId = customerId || (selector ? selector.value : null) || (this.state.customers && this.state.customers[0] ? (this.state.customers[0].id || this.state.customers[0].customer_id) : 'RCMAA0500655');
+            const targetId = customerId || (selector && selector.value ? selector.value : null) || this._currentPortalClient || (this.state.customers && this.state.customers[0] ? (this.state.customers[0].id || this.state.customers[0].customer_id) : 'RCMAA0500655');
             this._currentPortalClient = targetId;
 
             if (selector && targetId) {
@@ -2745,11 +2778,11 @@ const app = {
                             ${bookings.map(b => `
                                 <tr>
                                     <td><strong><code>${b.booking_ref}</code></strong></td>
-                                    <td style="font-weight:600;color:var(--primary);">${b.pax_name}</td>
-                                    <td><span class="badge badge-info">${b.sector}</span></td>
-                                    <td>${b.travel_date}</td>
+                                    <td style="font-weight:600;color:var(--primary);">${b.pax_name || '—'}</td>
+                                    <td><span class="badge badge-info">${b.sector || '—'}</span></td>
+                                    <td>${b.travel_date || '—'}</td>
                                     <td style="font-weight:600;color:var(--secondary);">₹${Number(b.booking_fare || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}</td>
-                                    <td><span class="badge badge-success">${b.status}</span></td>
+                                    <td><span class="badge badge-success">${b.status || 'Confirmed'}</span></td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -2832,16 +2865,27 @@ const app = {
         if (customerId) this.loadClientPortal(customerId);
     },
 
-    refreshClientPortal() {
-        this.loadClientPortal(this._currentPortalClient);
+    async refreshClientPortal() {
+        const btn = document.getElementById('cp-refresh-btn') || document.querySelector('#page-client-portal button[onclick*="refreshClientPortal"]');
+        const origText = btn ? btn.textContent : 'Refresh';
+        if (btn) { btn.disabled = true; btn.textContent = 'Refreshing...'; }
+
+        try {
+            const selector = document.getElementById('client-portal-selector');
+            const targetId = (selector && selector.value) ? selector.value : this._currentPortalClient;
+            await this.loadClientPortal(targetId);
+            this.showAlert(`Client portal refreshed successfully!`, 'success');
+        } catch (e) {
+            console.error('Refresh client portal error:', e);
+            this.showAlert(`Failed to refresh: ${e.message}`, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = origText; }
+        }
     },
 
     openClientRedeemModal() {
-        if (this._currentPortalClient) {
-            const input = document.getElementById('redeem-customer-id');
-            if (input) input.value = this._currentPortalClient;
-        }
-        this.openRedeemCouponModal();
+        const targetId = this._currentPortalClient || (this.state.customers && this.state.customers[0] ? this.state.customers[0].customer_id : '');
+        this.openRedeemCouponModal(targetId);
     },
 
     // ========================================================================
@@ -3298,14 +3342,138 @@ const app = {
         }
     },
 
-    openRedeemCouponModal() {
-        // Reset stale form data so a previous redemption's values can't be silently resubmitted
-        document.getElementById('redeem-customer-id').value = '';
-        document.getElementById('redeem-booking-ref').value = '';
-        document.getElementById('redeem-booking-fare').value = '';
+    _redeemCustomerData: null,
+    _redeemFetchTimer: null,
+
+    openRedeemCouponModal(prefilledCustomerId = null, prefilledBookingRef = null, prefilledFare = null) {
+        // Populate customer datalist from this.state.customers if available
+        const dl = document.getElementById('redeem-customers-datalist');
+        if (dl && this.state.customers && this.state.customers.length > 0) {
+            dl.innerHTML = this.state.customers.map(c => `<option value="${c.customer_id}">${c.name || ''} (${c.customer_id})</option>`).join('');
+        }
+
+        // Reset form & states
+        document.getElementById('redeem-customer-id').value = prefilledCustomerId || '';
+        document.getElementById('redeem-booking-ref').value = prefilledBookingRef || '';
+        document.getElementById('redeem-booking-fare').value = prefilledFare != null ? prefilledFare : '';
         document.getElementById('redeem-amount-slider').value = 0;
+        document.getElementById('redeem-amount-slider').max = 0;
+        document.getElementById('redeem-max').textContent = '0.00';
+        document.getElementById('redeem-client-info-box').style.display = 'none';
+        document.getElementById('redeem-booking-select-group').style.display = 'none';
+        this._redeemCustomerData = null;
+
         this.updateRedemptionCalc();
         this.openModal('redeemCouponModal');
+
+        if (prefilledCustomerId) {
+            this.fetchRedeemCustomerData(prefilledCustomerId, prefilledBookingRef, prefilledFare);
+        }
+    },
+
+    handleRedeemCustomerIdChange(val) {
+        val = (val || '').trim();
+        clearTimeout(this._redeemFetchTimer);
+        if (val.length >= 2) {
+            this._redeemFetchTimer = setTimeout(() => {
+                this.fetchRedeemCustomerData(val);
+            }, 300);
+        } else {
+            document.getElementById('redeem-client-info-box').style.display = 'none';
+            document.getElementById('redeem-booking-select-group').style.display = 'none';
+            this._redeemCustomerData = null;
+            this.handleRedeemFareChange();
+        }
+    },
+
+    async fetchRedeemCustomerData(customerId, targetBookingRef = null, targetFare = null) {
+        if (!customerId) return;
+        customerId = customerId.trim();
+        try {
+            // Fetch balance & dashboard details in parallel
+            const [balanceRes, dashRes] = await Promise.all([
+                this.apiCall(`/coupon/balance/${encodeURIComponent(customerId)}`).catch(() => null),
+                this.apiCall(`/client/dashboard/${encodeURIComponent(customerId)}`).catch(() => null)
+            ]);
+
+            const available = balanceRes ? Number(balanceRes.available || 0) : 0;
+            const clientName = (dashRes && dashRes.client ? dashRes.client.name : null) || customerId;
+            const bookings = (dashRes && dashRes.recent_bookings) ? dashRes.recent_bookings : [];
+
+            this._redeemCustomerData = { customerId, available, clientName, bookings };
+
+            // Show client info banner
+            document.getElementById('redeem-client-name').textContent = clientName;
+            document.getElementById('redeem-client-id-text').textContent = customerId;
+            document.getElementById('redeem-client-available-amt').textContent = available.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+            document.getElementById('redeem-client-info-box').style.display = 'block';
+
+            // Populate bookings dropdown
+            const bookingSelect = document.getElementById('redeem-booking-dropdown');
+            const bookingGroup = document.getElementById('redeem-booking-select-group');
+            if (bookings.length > 0) {
+                bookingSelect.innerHTML = `<option value="">-- Choose from ${bookings.length} Bookings --</option>` +
+                    bookings.map(b => `<option value="${b.booking_ref}" data-fare="${b.booking_fare || 0}">${b.booking_ref} • ${b.pax_name || 'Passenger'} (₹${Number(b.booking_fare || 0).toLocaleString('en-IN')})</option>`).join('');
+                bookingGroup.style.display = 'block';
+
+                if (targetBookingRef) {
+                    bookingSelect.value = targetBookingRef;
+                } else if (!document.getElementById('redeem-booking-ref').value && bookings[0]) {
+                    // Pre-fill with first booking
+                    document.getElementById('redeem-booking-ref').value = bookings[0].booking_ref;
+                    if (!targetFare) {
+                        document.getElementById('redeem-booking-fare').value = bookings[0].booking_fare || '';
+                    }
+                }
+            } else {
+                bookingGroup.style.display = 'none';
+            }
+
+            if (targetBookingRef) document.getElementById('redeem-booking-ref').value = targetBookingRef;
+            if (targetFare != null) document.getElementById('redeem-booking-fare').value = targetFare;
+
+            this.handleRedeemFareChange();
+
+        } catch (err) {
+            console.error('Error fetching redeem customer data:', err);
+        }
+    },
+
+    handleRedeemBookingSelect(bookingRef) {
+        if (!bookingRef || !this._redeemCustomerData) return;
+        const b = (this._redeemCustomerData.bookings || []).find(item => item.booking_ref === bookingRef);
+        if (b) {
+            document.getElementById('redeem-booking-ref').value = b.booking_ref;
+            document.getElementById('redeem-booking-fare').value = b.booking_fare || 0;
+            this.handleRedeemFareChange();
+        }
+    },
+
+    handleRedeemFareChange() {
+        const fare = parseFloat(document.getElementById('redeem-booking-fare').value) || 0;
+        const available = this._redeemCustomerData ? this._redeemCustomerData.available : 0;
+
+        // Maximum redeemable is min of available balance and booking fare
+        const maxRedeem = Math.max(0, Math.min(available, fare > 0 ? fare : available));
+
+        const slider = document.getElementById('redeem-amount-slider');
+        slider.max = maxRedeem;
+        document.getElementById('redeem-max').textContent = maxRedeem.toFixed(2);
+
+        // Auto-set slider to max redeemable if available > 0 and slider is currently 0 or exceeding
+        if (parseFloat(slider.value) > maxRedeem || (slider.value == 0 && maxRedeem > 0)) {
+            slider.value = maxRedeem;
+        }
+
+        this.updateRedemptionCalc();
+    },
+
+    setRedeemPercent(percent) {
+        const slider = document.getElementById('redeem-amount-slider');
+        const max = parseFloat(slider.max) || 0;
+        const val = Math.round((max * (percent / 100)) * 100) / 100;
+        slider.value = val;
+        this.updateRedemptionCalc();
     },
 
     updateRedemptionCalc() {
@@ -3320,22 +3488,51 @@ const app = {
     },
 
     async redeemCoupon() {
-        const btn = document.querySelector('#redeemCouponModal .btn-secondary');
+        const custId = (document.getElementById('redeem-customer-id').value || '').trim();
+        const bookingRef = (document.getElementById('redeem-booking-ref').value || '').trim();
+        const amount = parseFloat(document.getElementById('redeem-amount-slider').value) || 0;
+        const fare = parseFloat(document.getElementById('redeem-booking-fare').value) || 0;
+
+        if (!custId) {
+            this.showAlert('Please enter or select a Customer ID.', 'warning');
+            return;
+        }
+        if (!bookingRef) {
+            this.showAlert('Please enter or select a Booking Reference.', 'warning');
+            return;
+        }
+        if (amount <= 0) {
+            this.showAlert('Please select an amount to redeem greater than ₹0.', 'warning');
+            return;
+        }
+        if (fare <= 0) {
+            this.showAlert('Please enter a valid Booking Fare.', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('redeem-submit-btn') || document.querySelector('#redeemCouponModal .btn-secondary');
         if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+
         try {
             const data = {
-                customer_id: document.getElementById('redeem-customer-id').value,
-                booking_ref: document.getElementById('redeem-booking-ref').value,
-                amount_to_redeem: parseFloat(document.getElementById('redeem-amount-slider').value),
-                booking_fare: parseFloat(document.getElementById('redeem-booking-fare').value)
+                customer_id: custId,
+                booking_ref: bookingRef,
+                amount_to_redeem: amount,
+                booking_fare: fare
             };
 
             const result = await this.apiCall('/coupon/redeem', 'POST', data);
-            this.showAlert(`Coupon redeemed: ₹${result.coupon_redeemed}. Customer pays: ₹${result.customer_payable}`, 'success');
+            this.showAlert(`🎉 Coupon ₹${result.coupon_redeemed} redeemed successfully for ${custId}! Customer pays: ₹${result.customer_payable}. Remaining Balance: ₹${result.remaining_coupon_balance}`, 'success');
             this.closeModal('redeemCouponModal');
+
+            // Refresh Client Portal if active or open
+            if (this._currentPortalClient && this._currentPortalClient.toLowerCase() === custId.toLowerCase()) {
+                this.refreshClientPortal();
+            }
             this.loadDashboard();
         } catch (error) {
             console.error('Error redeeming coupon:', error);
+            this.showAlert(`Redemption error: ${error.message}`, 'error');
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = 'Redeem Coupon'; }
         }

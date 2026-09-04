@@ -133,7 +133,7 @@ async def run_all_tests():
         assert "min_redemption" in settings
         print(f"[PASS] 8.4 Settings API: min_redemption=₹{settings['min_redemption']}, max_redemption=₹{settings['max_redemption']}")
 
-        # 9. Test 13-Column Excel Template Download
+        # 9. Test 15-Column Excel Template Download (including Email & Mobile)
         r = await client.get("/api/upload/template")
         assert r.status_code == 200, f"Template download failed: {r.status_code}"
         import openpyxl, io
@@ -141,20 +141,20 @@ async def run_all_tests():
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
         expected_headers = [
-            "Booked Date", "Client", "Client ID", "S PNR", "Airline PNR",
+            "Booked Date", "Client", "Client ID", "Email", "Mobile", "S PNR", "Airline PNR",
             "Status", "Booking Type", "Username", "Pax Name", "Sector",
             "Date of Travel", "Parent PNR", "Net Amount"
         ]
         assert headers == expected_headers, f"Headers mismatch: {headers}"
-        print(f"[PASS] 9. Template Download: Successfully verified 13 columns -> {headers}")
+        print(f"[PASS] 9. Template Download: Successfully verified 15 columns -> {headers}")
 
-        # 10. Test 13-Column Excel Upload
+        # 10. Test 15-Column Excel Upload (with Email & Mobile)
         upload_wb = openpyxl.Workbook()
         upload_ws = upload_wb.active
         upload_ws.append(expected_headers)
         test_pnr = f"SPNR-TEST-{int(time.time())}"
         upload_ws.append([
-            "2026-08-29 10:30", "Test Agency", "CL-TEST-99", test_pnr, "6E-TEST",
+            "2026-08-29 10:30", "Test Agency", "CL-TEST-99", "autotester@agency.com", "+91 9876543210", test_pnr, "6E-TEST",
             "Ticketed", "Round Trip", "agent_auto", "MR AUTO TESTER", "MAA-DEL-MAA",
             "2026-10-15", "", 15000.0
         ])
@@ -172,7 +172,7 @@ async def run_all_tests():
         assert res_data["results"][0]["pax_name"] == "MR AUTO TESTER"
         assert res_data["results"][0]["sector"] == "MAA-DEL-MAA"
         assert res_data["results"][0]["booking_fare"] == 15000.0
-        print(f"[PASS] 10. Excel 13-Column Upload: {res_data['summary']['success']} row processed, Total Earned=₹{res_data['summary']['total_coupon_earned']}, Pax='{res_data['results'][0]['pax_name']}', Coupon=₹{res_data['results'][0]['coupon_earned']}")
+        print(f"[PASS] 10. Excel 15-Column Upload: {res_data['summary']['success']} row processed, Total Earned=₹{res_data['summary']['total_coupon_earned']}, Pax='{res_data['results'][0]['pax_name']}', Coupon=₹{res_data['results'][0]['coupon_earned']}")
 
         # 11. Test Rules with Office ID & Booking Type and Stats
         r = await client.get("/api/rules/stats")

@@ -59,6 +59,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -492,6 +493,61 @@ def get_current_user_profile(email: Optional[str] = Query(None), db: Session = D
     }
 
 
+def recalculate_customer_balance(db: Session, customer_id: str) -> models.CouponBalance:
+    """
+    Reconcile and synchronize CouponBalance directly from the source of truth (Coupons & Redemptions).
+    """
+    cid = customer_id.strip()
+    from sqlalchemy import func
+
+    c_earned = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+        models.Coupon.customer_id == cid,
+        models.Coupon.status.in_(["Pending", "Eligible", "Redeemed", "Active"])
+    ).scalar() or 0.0
+
+    c_pending = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+        models.Coupon.customer_id == cid,
+        models.Coupon.status == "Pending"
+    ).scalar() or 0.0
+
+    c_eligible = db.query(func.sum(models.Coupon.coupon_amount)).filter(
+        models.Coupon.customer_id == cid,
+        models.Coupon.status.in_(["Eligible", "Active"])
+    ).scalar() or 0.0
+
+    c_redeemed = db.query(func.sum(models.CouponRedemption.amount_redeemed)).filter(
+        models.CouponRedemption.customer_id == cid,
+        models.CouponRedemption.status == "Success"
+    ).scalar() or 0.0
+
+    avail = max(0.0, float(c_eligible) - float(c_redeemed))
+
+    bal = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == cid).first()
+    if bal:
+        bal.total_earned = float(c_earned)
+        bal.pending = float(c_pending)
+        bal.available = avail
+        bal.redeemed = float(c_redeemed)
+    else:
+        bal = models.CouponBalance(
+            customer_id=cid,
+            total_earned=float(c_earned),
+            pending=float(c_pending),
+            available=avail,
+            redeemed=float(c_redeemed),
+            expired=0.0,
+            cancelled=0.0
+        )
+        db.add(bal)
+    try:
+        db.commit()
+        db.refresh(bal)
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] recalculate_customer_balance commit failed: {e}")
+    return bal
+
+
 # ============================================================================
 # AUTOMATIC COUPON MATURITY HELPER (POST TRAVEL + 1 DAY)
 # ============================================================================
@@ -501,6 +557,7 @@ def auto_mature_pending_coupons(db: Session, customer_id: Optional[str] = None) 
     - Performs a single indexed JOIN query instead of N+1 network queries.
     - If travel_date <= today: Transitions coupon to 'Eligible' and moves to 'Available'.
     - If travel_date > today: Reverts/maintains coupon in 'Pending'.
+    - Automatically updates wallet balance to ensure 100% real-time consistency.
     """
     now = datetime.utcnow()
     today_date = now.date()
@@ -515,6 +572,9 @@ def auto_mature_pending_coupons(db: Session, customer_id: Optional[str] = None) 
     pairs = query.all()
     count = 0
     affected_customers = set()
+
+    if customer_id:
+        affected_customers.add(customer_id)
 
     for coupon, booking in pairs:
         is_travel_completed = False
@@ -531,63 +591,25 @@ def auto_mature_pending_coupons(db: Session, customer_id: Optional[str] = None) 
             if coupon.status != "Eligible":
                 coupon.status = "Eligible"
                 coupon.updated_at = now
-                affected_customers.add(coupon.customer_id)
                 count += 1
+            affected_customers.add(coupon.customer_id)
         else:
             if coupon.status != "Pending":
                 coupon.status = "Pending"
                 coupon.updated_at = now
-                affected_customers.add(coupon.customer_id)
                 count += 1
+            affected_customers.add(coupon.customer_id)
 
-    # Recalculate balances only for affected customers
+    # Recalculate balances for all affected customers
     from sqlalchemy import func
     for cid in affected_customers:
-        c_earned = db.query(func.sum(models.Coupon.coupon_amount)).filter(
-            models.Coupon.customer_id == cid,
-            models.Coupon.status.in_(["Pending", "Eligible", "Redeemed", "Active"])
-        ).scalar() or 0.0
+        recalculate_customer_balance(db, cid)
 
-        c_pending = db.query(func.sum(models.Coupon.coupon_amount)).filter(
-            models.Coupon.customer_id == cid,
-            models.Coupon.status == "Pending"
-        ).scalar() or 0.0
-
-        c_eligible = db.query(func.sum(models.Coupon.coupon_amount)).filter(
-            models.Coupon.customer_id == cid,
-            models.Coupon.status == "Eligible"
-        ).scalar() or 0.0
-
-        c_redeemed = db.query(func.sum(models.CouponRedemption.amount_redeemed)).filter(
-            models.CouponRedemption.customer_id == cid,
-            models.CouponRedemption.status == "Success"
-        ).scalar() or 0.0
-
-        avail = max(0.0, float(c_eligible) - float(c_redeemed))
-
-        bal = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == cid).first()
-        if bal:
-            bal.total_earned = float(c_earned)
-            bal.pending = float(c_pending)
-            bal.available = avail
-            bal.redeemed = float(c_redeemed)
-        else:
-            db.add(models.CouponBalance(
-                customer_id=cid,
-                total_earned=float(c_earned),
-                pending=float(c_pending),
-                available=avail,
-                redeemed=float(c_redeemed),
-                expired=0.0,
-                cancelled=0.0
-            ))
-
-    if count > 0:
-        try:
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            print(f"[ERROR] auto_mature_pending_coupons commit failed: {e}")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] auto_mature_pending_coupons commit failed: {e}")
 
     return count
 
@@ -757,21 +779,8 @@ def get_client_dashboard(customer_id: str, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(customer)
 
-    # Balance
-    balance = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == customer_id).first()
-    if not balance:
-        balance = models.CouponBalance(
-            customer_id=customer_id,
-            total_earned=0.0,
-            pending=0.0,
-            available=0.0,
-            redeemed=0.0,
-            expired=0.0,
-            cancelled=0.0
-        )
-        db.add(balance)
-        db.commit()
-        db.refresh(balance)
+    # Balance - Reconcile directly from coupons to guarantee exact Available and Pending values
+    balance = recalculate_customer_balance(db, customer_id=customer_id)
 
     # Bookings
     bookings = db.query(models.Booking).filter(
@@ -855,33 +864,7 @@ def get_customer_balance(customer_id: str, db: Session = Depends(get_db)):
     
     # Auto mature any pending coupons that passed travel_date + 1 day
     auto_mature_pending_coupons(db, customer_id=customer_id)
-
-    balance = db.query(models.CouponBalance).filter(models.CouponBalance.customer_id == customer_id).first()
-    
-    if not balance:
-        cust = db.query(models.Customer).filter(models.Customer.customer_id == customer_id).first()
-        if not cust:
-            cust = models.Customer(
-                customer_id=customer_id,
-                name=f"Customer {customer_id}",
-                email=f"{customer_id.lower()}@example.com",
-                status="Active"
-            )
-            db.add(cust)
-            db.commit()
-            
-        balance = models.CouponBalance(
-            customer_id=customer_id,
-            total_earned=0.0,
-            pending=0.0,
-            available=0.0,
-            redeemed=0.0,
-            expired=0.0,
-            cancelled=0.0
-        )
-        db.add(balance)
-        db.commit()
-        db.refresh(balance)
+    balance = recalculate_customer_balance(db, customer_id=customer_id)
 
     return schemas.BalanceResponse(
         customer_id=balance.customer_id,
@@ -1543,18 +1526,33 @@ def create_booking(payload: schemas.BookingCreate, db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail="Booking reference (S PNR) and Customer / Client ID are required")
 
     cust = db.query(models.Customer).filter(models.Customer.customer_id == cust_id).first()
+    email_val = (payload.email or payload.client_email or "").strip()
+    phone_val = (payload.phone or payload.mobile or payload.client_mobile or "").strip()
+    default_email = email_val if (email_val and "@" in email_val) else f"{cust_id.lower().replace(' ', '_')}@travel.com"
+
     if not cust:
         cust = models.Customer(
             customer_id=cust_id,
             name=cust_name,
-            email=f"{cust_id.lower().replace(' ', '_')}@example.com",
+            email=default_email,
+            phone=phone_val or None,
             status="Active"
         )
         db.add(cust)
         db.commit()
-    elif cust_name and cust.name.startswith("Customer ") and cust_name != f"Customer {cust_id}":
-        cust.name = cust_name
-        db.commit()
+    else:
+        updated = False
+        if email_val and "@" in email_val and ("@travel.com" in (cust.email or "") or "@example.com" in (cust.email or "") or not cust.email):
+            cust.email = email_val
+            updated = True
+        if phone_val and not cust.phone:
+            cust.phone = phone_val
+            updated = True
+        if cust_name and cust.name.startswith("Customer ") and cust_name != f"Customer {cust_id}":
+            cust.name = cust_name
+            updated = True
+        if updated:
+            db.commit()
 
     travel_raw = payload.travel_date or payload.travel
     travel_dt = parse_flexible_date(travel_raw, default=datetime.utcnow() + timedelta(days=7))
@@ -1562,27 +1560,106 @@ def create_booking(payload: schemas.BookingCreate, db: Session = Depends(get_db)
     booking_date_raw = payload.booking_date or payload.booked_date
     booking_dt = parse_flexible_date(booking_date_raw, default=datetime.utcnow())
 
-    booking = models.Booking(
-        booking_ref=ref,
-        customer_id=cust_id,
+    existing_booking = db.query(models.Booking).filter(models.Booking.booking_ref == ref).first()
+    if existing_booking:
+        existing_booking.customer_id = cust_id
+        existing_booking.booking_fare = fare
+        existing_booking.travel_date = travel_dt
+        existing_booking.booking_date = booking_dt
+        existing_booking.status = payload.status or existing_booking.status or "Completed"
+        if payload.supplier is not None: existing_booking.supplier = payload.supplier
+        if payload.airline is not None: existing_booking.airline = payload.airline
+        if payload.fare_type is not None: existing_booking.fare_type = payload.fare_type
+        if payload.airline_pnr is not None: existing_booking.airline_pnr = payload.airline_pnr
+        if payload.booking_type is not None: existing_booking.booking_type = payload.booking_type
+        if payload.sector is not None: existing_booking.sector = payload.sector
+        if payload.parent_pnr is not None: existing_booking.parent_pnr = payload.parent_pnr
+        if payload.pax_name is not None: existing_booking.pax_name = payload.pax_name
+        if payload.source_status is not None: existing_booking.source_status = payload.source_status
+        if payload.username is not None: existing_booking.username = payload.username
+        booking = existing_booking
+    else:
+        booking = models.Booking(
+            booking_ref=ref,
+            customer_id=cust_id,
+            supplier=payload.supplier,
+            airline=payload.airline,
+            fare_type=payload.fare_type,
+            booking_fare=fare,
+            booking_date=booking_dt,
+            travel_date=travel_dt,
+            status=payload.status or "Completed",
+            airline_pnr=payload.airline_pnr,
+            booking_type=payload.booking_type,
+            sector=payload.sector,
+            parent_pnr=payload.parent_pnr,
+            pax_name=payload.pax_name,
+            source_status=payload.source_status or payload.status or "Completed",
+            username=payload.username
+        )
+        db.add(booking)
+
+    try:
+        db.commit()
+        db.refresh(booking)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to save booking: {str(e)}")
+
+    # Automatically issue coupon and reconcile balance if fare > 0
+    coupon = db.query(models.Coupon).filter(models.Coupon.booking_ref == ref).first()
+    rules = db.query(models.CouponRule).filter(models.CouponRule.status == "Active").order_by(desc(models.CouponRule.priority), models.CouponRule.id.asc()).all()
+    matched_rule = find_matching_rule(
+        rules=rules,
+        booking_type=payload.booking_type,
         supplier=payload.supplier,
         airline=payload.airline,
-        fare_type=payload.fare_type,
-        booking_fare=fare,
-        booking_date=booking_dt,
-        travel_date=travel_dt,
-        status=payload.status or "Completed",
-        airline_pnr=payload.airline_pnr,
-        booking_type=payload.booking_type,
-        sector=payload.sector,
-        parent_pnr=payload.parent_pnr,
-        pax_name=payload.pax_name,
-        source_status=payload.source_status or payload.status or "Completed",
-        username=payload.username
+        fare_type=payload.fare_type
     )
-    db.add(booking)
-    db.commit()
-    db.refresh(booking)
+    matched_percent = float(matched_rule.coupon_percent) if matched_rule else 1.0
+    coupon_earned = round(fare * (matched_percent / 100.0), 2)
+    eligibility_dt = travel_dt + timedelta(days=1)
+    today_date = datetime.utcnow().date()
+    travel_completed = (travel_dt and travel_dt.date() <= today_date) or (eligibility_dt and eligibility_dt.date() <= today_date)
+    init_status = "Eligible" if travel_completed else "Pending"
+
+    if not coupon and fare > 0:
+        coupon = models.Coupon(
+            coupon_id=f"CPN-{ref}",
+            booking_ref=ref,
+            customer_id=cust_id,
+            coupon_amount=coupon_earned,
+            coupon_percent=matched_percent,
+            status=init_status,
+            eligibility_date=eligibility_dt,
+            created_at=datetime.utcnow()
+        )
+        db.add(coupon)
+
+        txn_id = f"TXN-MANUAL-{int(time.time())}.{random.randint(1,999)}"
+        ledger_entry = models.CouponLedger(
+            txn_id=txn_id,
+            customer_id=cust_id,
+            booking_ref=ref,
+            txn_type="Coupon Earned",
+            booking_fare=fare,
+            coupon_percent=matched_percent,
+            coupon_earned=coupon_earned,
+            amount=coupon_earned,
+            status=init_status,
+            travel_date=travel_dt,
+            created_at=datetime.utcnow()
+        )
+        db.add(ledger_entry)
+        db.commit()
+        recalculate_customer_balance(db, cust_id)
+    elif coupon:
+        # If existing coupon exists and travel completed, ensure status updated
+        if travel_completed and coupon.status == "Pending":
+            coupon.status = "Eligible"
+        coupon.customer_id = cust_id
+        db.commit()
+        recalculate_customer_balance(db, cust_id)
 
     client_name = cust.name if cust else cust_name
     return schemas.BookingResponse(
@@ -2109,24 +2186,42 @@ def _process_single_booking_row(row_data: dict, db: Session) -> dict:
         customer = db.query(models.Customer).filter(
             models.Customer.customer_id == customer_id
         ).first()
-        if not customer:
-            email_val = f"{customer_id.lower()}@travel.com"
-            if username and "@" in username:
-                email_val = username
-            elif "@" in customer_name_raw:
-                email_val = customer_name_raw.strip()
 
+        raw_email = row_data.get("email")
+        if raw_email and "@" in str(raw_email):
+            email_val = str(raw_email).strip().lower()
+        elif username and "@" in str(username):
+            email_val = str(username).strip().lower()
+        elif "@" in customer_name_raw:
+            email_val = customer_name_raw.strip().lower()
+        else:
+            email_val = f"{customer_id.lower()}@travel.com"
+
+        raw_phone = str(row_data.get("phone") or row_data.get("mobile") or "").strip()
+
+        if not customer:
             customer = models.Customer(
                 customer_id=customer_id,
                 name=customer_name or f"Client {customer_id}",
                 email=email_val,
+                phone=raw_phone or None,
                 status="Active"
             )
             db.add(customer)
             db.commit()
-        elif customer_name and customer.name.startswith("Client ") and customer_name != f"Client {customer_id}":
-            customer.name = customer_name
-            db.commit()
+        else:
+            updated = False
+            if raw_email and "@" in str(raw_email) and (not customer.email or "@travel.com" in customer.email):
+                customer.email = email_val
+                updated = True
+            if raw_phone and not customer.phone:
+                customer.phone = raw_phone
+                updated = True
+            if customer_name and customer.name.startswith("Client ") and customer_name != f"Client {customer_id}":
+                customer.name = customer_name
+                updated = True
+            if updated:
+                db.commit()
 
         # ---- 8. Priority Rule Matching ----
         rules = db.query(models.CouponRule).filter(
@@ -2145,6 +2240,20 @@ def _process_single_booking_row(row_data: dict, db: Session) -> dict:
 
         coupon_earned = round(booking_fare * (matched_percent / 100.0), 2)
         eligibility_dt = travel_dt + timedelta(days=1)
+
+        # Immediate maturity check: if travel date has completed (or travel + 1 day <= today), coupon is immediately Eligible
+        today_date = datetime.utcnow().date()
+        travel_completed = False
+        if travel_dt:
+            t_d = travel_dt.date() if isinstance(travel_dt, datetime) else travel_dt
+            if t_d <= today_date:
+                travel_completed = True
+        elif eligibility_dt:
+            e_d = eligibility_dt.date() if isinstance(eligibility_dt, datetime) else eligibility_dt
+            if e_d <= today_date:
+                travel_completed = True
+
+        init_status = "Eligible" if travel_completed else "Pending"
 
         # Normalize Ticketed status to Confirmed
         norm_status = (source_status or "Confirmed").strip()
@@ -2172,7 +2281,7 @@ def _process_single_booking_row(row_data: dict, db: Session) -> dict:
         )
         db.add(booking)
 
-        # ---- 10. Save Coupon (Pending until travel date) ----
+        # ---- 10. Save Coupon (Eligible if travel already completed, else Pending) ----
         coupon_id = f"CPN-{booking_ref}"
         coupon = models.Coupon(
             coupon_id=coupon_id,
@@ -2180,7 +2289,7 @@ def _process_single_booking_row(row_data: dict, db: Session) -> dict:
             customer_id=customer_id,
             coupon_amount=coupon_earned,
             coupon_percent=matched_percent,
-            status="Pending",
+            status=init_status,
             eligibility_date=eligibility_dt,
             created_at=datetime.utcnow()
         )
@@ -2197,33 +2306,15 @@ def _process_single_booking_row(row_data: dict, db: Session) -> dict:
             coupon_percent=matched_percent,
             coupon_earned=coupon_earned,
             amount=coupon_earned,
-            status="Pending",
+            status=init_status,
             travel_date=travel_dt,
             created_at=datetime.utcnow()
         )
         db.add(ledger_entry)
-
-        # ---- 12. Update Coupon Balance in MySQL ----
-        balance = db.query(models.CouponBalance).filter(
-            models.CouponBalance.customer_id == customer_id
-        ).first()
-
-        if not balance:
-            balance = models.CouponBalance(
-                customer_id=customer_id,
-                total_earned=coupon_earned,
-                pending=coupon_earned,
-                available=0.0,
-                redeemed=0.0,
-                expired=0.0,
-                cancelled=0.0
-            )
-            db.add(balance)
-        else:
-            balance.total_earned = float(balance.total_earned or 0.0) + coupon_earned
-            balance.pending = float(balance.pending or 0.0) + coupon_earned
-
         db.commit()
+
+        # ---- 12. Synchronize Coupon Balance in MySQL ----
+        recalculate_customer_balance(db, customer_id=customer_id)
 
         return {
             "row": row_num,
@@ -2294,6 +2385,26 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
             "client_id": "customer_id",
             "customer id": "customer_id",
             "customer_id": "customer_id",
+            "email": "email",
+            "client email": "email",
+            "client_email": "email",
+            "customer email": "email",
+            "customer_email": "email",
+            "email id": "email",
+            "email_id": "email",
+            "e-mail": "email",
+            "mobile": "phone",
+            "mobile number": "phone",
+            "mobile_number": "phone",
+            "mobile no": "phone",
+            "phone": "phone",
+            "phone number": "phone",
+            "phone_number": "phone",
+            "phone no": "phone",
+            "contact": "phone",
+            "contact number": "phone",
+            "client mobile": "phone",
+            "client phone": "phone",
             "office id": "office_id",
             "office_id": "office_id",
             "office": "office_id",
@@ -2393,15 +2504,15 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
 def download_template():
     """
     Download a ready-to-use Excel template for bulk booking & passenger upload.
-    Includes the 13 standard columns and sample confirmed bookings.
+    Includes the 14 standard columns (with Email) and sample confirmed bookings.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Bookings"
 
-    # Header row (13 columns)
+    # Header row (15 columns including Email and Mobile)
     headers = [
-        "Booked Date", "Client", "Client ID", "S PNR", "Airline PNR",
+        "Booked Date", "Client", "Client ID", "Email", "Mobile", "S PNR", "Airline PNR",
         "Status", "Booking Type", "Username", "Pax Name", "Sector",
         "Date of Travel", "Parent PNR", "Net Amount"
     ]
@@ -2426,18 +2537,18 @@ def download_template():
         cell.border    = thin_border
     ws.row_dimensions[1].height = 28
 
-    # Column widths
-    col_widths = [18, 20, 14, 16, 16, 14, 16, 16, 24, 18, 16, 16, 14]
+    # Column widths (15 columns)
+    col_widths = [18, 20, 14, 24, 16, 16, 16, 14, 16, 16, 24, 18, 16, 16, 14]
     for i, width in enumerate(col_widths, start=1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = width
 
-    # Sample realistic data rows with Confirmed status and diverse booking types
+    # Sample realistic data rows with Confirmed status, Email, Mobile and diverse booking types
     sample_rows = [
-        ["2026-08-29 10:30", "ABC Holidays",   "CL-1001", "SPNR78901", "6E-XY789", "Confirmed", "Web Booking",           "agent_priya",  "MR RAHUL SHARMA",     "DEL-BOM-DEL", "2026-09-15", "",          12500],
-        ["2026-08-29 11:15", "Global Travels", "CL-1002", "SPNR78902", "AI-AB456", "Confirmed", "Indesk Booking",        "agent_vikram", "MS ANITHA RAJAN",     "MAA-BLR",     "2026-09-20", "",           6800],
-        ["2026-08-29 11:45", "ABC Holidays",   "CL-1001", "SPNR78903", "SG-98765", "Confirmed", "Travel Desk Booking",   "agent_priya",  "MR KARTHIK SUNDAR",   "BLR-DEL-BLR", "2026-10-05", "SPNR78901", 18400],
-        ["2026-08-29 12:00", "Star Tours",     "CL-1003", "SPNR78904", "UK-54321", "Confirmed", "Mobile Booking",        "agent_deepa",  "MRS POOJA HEGDE",     "BOM-GOI-BOM", "2026-10-12", "",          14200],
-        ["2026-08-29 12:30", "Global Travels", "CL-1002", "SPNR78905", "6E-55443", "Confirmed", "Retrieve PNR Ticketing","agent_vikram", "MR SURESH MENON",     "MAA-HYD",     "2026-11-01", "",           5400],
+        ["2026-08-29 10:30", "ABC Holidays",   "CL-1001", "booking@abcholidays.com", "+91 9876543210", "SPNR78901", "6E-XY789", "Confirmed", "Web Booking",           "agent_priya",  "MR RAHUL SHARMA",     "DEL-BOM-DEL", "2026-09-15", "",          12500],
+        ["2026-08-29 11:15", "Global Travels", "CL-1002", "info@globaltravels.in",   "+91 9876543211", "SPNR78902", "AI-AB456", "Confirmed", "Indesk Booking",        "agent_vikram", "MS ANITHA RAJAN",     "MAA-BLR",     "2026-09-20", "",           6800],
+        ["2026-08-29 11:45", "ABC Holidays",   "CL-1001", "booking@abcholidays.com", "+91 9876543210", "SPNR78903", "SG-98765", "Confirmed", "Travel Desk Booking",   "agent_priya",  "MR KARTHIK SUNDAR",   "BLR-DEL-BLR", "2026-10-05", "SPNR78901", 18400],
+        ["2026-08-29 12:00", "Star Tours",     "CL-1003", "contact@startours.com",  "+91 9876543212", "SPNR78904", "UK-54321", "Confirmed", "Mobile Booking",        "agent_deepa",  "MRS POOJA HEGDE",     "BOM-GOI-BOM", "2026-10-12", "",          14200],
+        ["2026-08-29 12:30", "Global Travels", "CL-1002", "info@globaltravels.in",   "+91 9876543211", "SPNR78905", "6E-55443", "Confirmed", "Retrieve PNR Ticketing","agent_vikram", "MR SURESH MENON",     "MAA-HYD",     "2026-11-01", "",           5400],
     ]
 
     fill_even = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
@@ -2449,9 +2560,9 @@ def download_template():
         for col_i, cell in enumerate(ws[r_idx], start=1):
             cell.border = thin_border
             cell.fill   = fill_even if r_idx % 2 == 0 else fill_odd
-            if col_i in (2, 9):  # Client & Pax Name
+            if col_i in (2, 4, 10):  # Client, Email & Pax Name
                 cell.alignment = left_align
-            elif col_i == 13:   # Net Amount
+            elif col_i == 14:   # Net Amount
                 cell.alignment = right_align
                 cell.number_format = '#,##0.00'
             else:
@@ -2467,6 +2578,7 @@ def download_template():
         ("Booked Date", "Date & time the booking was made (e.g. 2026-08-29 10:30 or 29/08/2026). Defaults to now if empty.", "Optional"),
         ("Client", "Name of the travel agency or corporate client (e.g. ABC Holidays).", "Optional (Auto-created)"),
         ("Client ID", "Unique Client/Customer ID (e.g. CL-1001 or CUST001). Must exist or will be auto-created.", "REQUIRED"),
+        ("Email", "Client / Agency contact email address (e.g. booking@agency.com). Used for notifications & client portal login.", "Optional / Recommended"),
         ("S PNR", "System Booking Reference / PNR (e.g. SPNR78901). Duplicate PNRs in DB will be skipped.", "REQUIRED"),
         ("Airline PNR", "Airline confirmation PNR code (e.g. 6E-XY789, AI-AB456).", "Optional"),
         ("Status", "Booking / Ticket status (e.g. Ticketed, Confirmed, Completed).", "Optional"),

@@ -2239,9 +2239,24 @@
 // APPLICATION STATE & CONFIG
 // ============================================================================
 const app = {
-    apiBase: (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-        ? 'http://localhost:8000/api'
-        : 'https://coupon-system-4788.onrender.com/api',
+    apiBase: (function() {
+        if (typeof window !== 'undefined') {
+            if (localStorage.getItem('coupon_api_base')) {
+                return localStorage.getItem('coupon_api_base');
+            }
+            const isLocal = !window.location.hostname || 
+                            window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1' || 
+                            window.location.hostname === '0.0.0.0' || 
+                            window.location.protocol === 'file:';
+            if (isLocal) {
+                return 'http://127.0.0.1:8000/api';
+            }
+            // Production deployment (Netlify, Render, Vercel, or live domain)
+            return 'https://coupon-system-4788.onrender.com/api';
+        }
+        return 'http://127.0.0.1:8000/api';
+    })(),
     currentUser: { name: 'Admin', role: 'admin' },
     session: {
         token: null,

@@ -140,6 +140,11 @@ class BookingCreate(BaseModel):
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     client: Optional[str] = None
+    email: Optional[str] = None
+    client_email: Optional[str] = None
+    phone: Optional[str] = None
+    mobile: Optional[str] = None
+    client_mobile: Optional[str] = None
     supplier: Optional[str] = None
     airline: Optional[str] = None
     fare_type: Optional[str] = None

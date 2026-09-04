@@ -1592,7 +1592,7 @@
                         <div class="alert alert-info" style="margin-bottom:1.5rem;">
                             <div>
                                 <strong>Supported Excel Format:</strong><br>
-                                Accepts standard 13-column exports: <code>Booked Date | Client | Client ID | S PNR | Airline PNR | Status | Booking Type | Username | Pax Name | Sector | Date of Travel | Parent PNR | Net Amount</code>.<br>
+                                Accepts standard exports: <code>Booked Date | Client | Client ID | Email | Mobile | S PNR | Airline PNR | Status | Booking Type | Username | Pax Name | Sector | Date of Travel | Parent PNR | Net Amount</code>.<br>
                                 Coupons are automatically calculated and recorded to MySQL.
                             </div>
                         </div>
@@ -1647,7 +1647,7 @@
                     <!-- RIGHT: Column Reference Info -->
                     <div class="card">
                         <div class="card-header">
-                            <div class="card-title">13-Column Format Reference</div>
+                            <div class="card-title">15-Column Format Reference</div>
                         </div>
 
                         <div style="margin-bottom:1rem;max-height:420px;overflow-y:auto;">
@@ -1663,6 +1663,8 @@
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Booked Date</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">Date</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);">2026-08-29 10:30</td></tr>
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Client</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">String</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);">ABC Holidays</td></tr>
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:700;">Client ID</span></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--danger);font-weight:600;">Required</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><code>CL-1001</code></td></tr>
+                                    <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Email</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">Email</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><code>booking@agency.com</code></td></tr>
+                                    <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Mobile</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">Phone</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><code>+91 9876543210</code></td></tr>
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:700;">S PNR</span></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--danger);font-weight:600;">Required</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><code>SPNR78901</code></td></tr>
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Airline PNR</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">String</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);">6E-XY789</td></tr>
                                     <tr><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);"><strong>Status</strong></td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);color:var(--text-lighter);">String</td><td style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);">Ticketed / Confirmed</td></tr>
@@ -2138,6 +2140,16 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
+                        <label>Client Email</label>
+                        <input type="email" id="add-book-email" placeholder="client@agency.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Client Mobile / Phone</label>
+                        <input type="tel" id="add-book-phone" placeholder="+91 9876543210">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
                         <label>Sector (Route)</label>
                         <input type="text" id="add-book-sector" placeholder="DEL-BOM-DEL">
                     </div>
@@ -2178,9 +2190,11 @@
                         <input type="date" id="add-book-travel-date" required>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Booked Date</label>
-                    <input type="datetime-local" id="add-book-booking-date">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Booked Date</label>
+                        <input type="datetime-local" id="add-book-booking-date">
+                    </div>
                 </div>
                 <div class="modal-footer" style="border: none; padding: 0; margin-top: 1.5rem;">
                     <button type="button" class="btn btn-ghost" onclick="app.closeModal('addBookingModal')">Cancel</button>
@@ -2239,9 +2253,24 @@
 // APPLICATION STATE & CONFIG
 // ============================================================================
 const app = {
-    apiBase: (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-        ? 'http://localhost:8000/api'
-        : 'https://coupon-system-4788.onrender.com/api',
+    apiBase: (function() {
+        if (typeof window !== 'undefined') {
+            if (localStorage.getItem('coupon_api_base')) {
+                return localStorage.getItem('coupon_api_base');
+            }
+            const isLocal = !window.location.hostname || 
+                            window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1' || 
+                            window.location.hostname === '0.0.0.0' || 
+                            window.location.protocol === 'file:';
+            if (isLocal) {
+                return 'http://127.0.0.1:8000/api';
+            }
+            // Production deployment (Netlify, Render, Vercel, or live domain)
+            return 'https://coupon-system-4788.onrender.com/api';
+        }
+        return 'http://127.0.0.1:8000/api';
+    })(),
     currentUser: { name: 'Admin', role: 'admin' },
     session: {
         token: null,
@@ -2550,7 +2579,7 @@ const app = {
     // API CALLS
     // ========================================================================
     async apiCall(endpoint, method = 'GET', data = null) {
-        try {
+        const doFetch = async (baseUrl) => {
             const options = {
                 method,
                 headers: {
@@ -2562,17 +2591,43 @@ const app = {
                 options.body = JSON.stringify(data);
             }
 
-            const response = await fetch(`${this.apiBase}${endpoint}`, options);
+            const response = await fetch(`${baseUrl}${endpoint}`, options);
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || `HTTP ${response.status}`);
+                let errorMsg = `HTTP ${response.status}`;
+                try {
+                    const error = await response.json();
+                    errorMsg = error.detail || error.message || errorMsg;
+                } catch (e) {}
+                throw new Error(errorMsg);
             }
 
             return await response.json();
+        };
+
+        try {
+            return await doFetch(this.apiBase);
         } catch (error) {
+            const isFetchErr = error.name === 'TypeError' && (error.message || '').toLowerCase().includes('fetch');
+            if (isFetchErr) {
+                // Dual-stack fallback (127.0.0.1 <-> localhost)
+                const altBase = this.apiBase.includes('127.0.0.1')
+                    ? this.apiBase.replace('127.0.0.1', 'localhost')
+                    : (this.apiBase.includes('localhost') ? this.apiBase.replace('localhost', '127.0.0.1') : null);
+                if (altBase) {
+                    try {
+                        const res = await doFetch(altBase);
+                        this.apiBase = altBase;
+                        return res;
+                    } catch (e2) {}
+                }
+            }
+
             console.error('API Error:', error);
-            this.showAlert(error.message, 'error');
+            const displayMsg = isFetchErr
+                ? `Cannot connect to backend server (${this.apiBase}). Please verify the backend is running.`
+                : error.message;
+            this.showAlert(displayMsg, 'error');
             throw error;
         }
     },
@@ -2582,8 +2637,7 @@ const app = {
             const health = await this.apiCall('/health');
             console.log('Backend is healthy:', health);
         } catch (error) {
-            console.error('Backend unavailable:', error);
-            this.showAlert('Backend server is not responding. Please start the backend.', 'error');
+            console.warn('Backend unavailable:', error);
         }
     },
 
@@ -3656,6 +3710,8 @@ const app = {
             const paxName = document.getElementById('add-book-pax').value.trim();
             const customerId = document.getElementById('add-book-cust').value.trim();
             const clientName = document.getElementById('add-book-client-name').value.trim();
+            const email = (document.getElementById('add-book-email') ? document.getElementById('add-book-email').value : '').trim();
+            const phone = (document.getElementById('add-book-phone') ? document.getElementById('add-book-phone').value : '').trim();
             const sector = document.getElementById('add-book-sector').value.trim();
             const bookingType = document.getElementById('add-book-type').value;
             const airlinePnr = document.getElementById('add-book-airline-pnr').value.trim();
@@ -3671,6 +3727,11 @@ const app = {
                 customer_id: customerId,
                 customer_name: clientName || undefined,
                 client: clientName || undefined,
+                email: email || undefined,
+                client_email: email || undefined,
+                phone: phone || undefined,
+                mobile: phone || undefined,
+                client_mobile: phone || undefined,
                 pax_name: paxName || undefined,
                 sector: sector || undefined,
                 booking_type: bookingType || undefined,
@@ -3691,7 +3752,10 @@ const app = {
             document.getElementById('add-booking-form').reset();
         } catch (error) {
             console.error('Error adding booking:', error);
-            this.showAlert(`Error adding booking: ${error.message}`, 'error');
+            const isFetchErr = error.name === 'TypeError' && (error.message || '').toLowerCase().includes('fetch');
+            if (!isFetchErr) {
+                this.showAlert(`Error adding booking: ${error.message}`, 'error');
+            }
         }
     },
 
@@ -4070,6 +4134,12 @@ const app = {
     },
 
     showAlert(message, type = 'success') {
+        if (!message) return;
+        const existingAlerts = document.querySelectorAll('.alert');
+        for (const el of existingAlerts) {
+            if (el.textContent.includes(message)) return;
+        }
+
         const alertDiv = document.createElement('div');
         alertDiv.className = `alert alert-${type}`;
         alertDiv.innerHTML = `
